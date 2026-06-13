@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yosoku"
+version = "0.1.0"
+description = "日本株トレーディングセンサー: 適時開示・ニュースを取り込み、Claudeで判定しDiscordに通知する"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40",
+    "requests>=2.31",
+    "feedparser>=6.0",
+    "pydantic>=2.5",
+    "PyYAML>=6.0",
+    "yfinance>=0.2.40",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+yosoku = "yosoku.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["yosoku*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

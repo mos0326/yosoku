@@ -1,0 +1,56 @@
+# yosoku を GitHub Actions 上で定期実行するテンプレート。
+#
+# 使い方:
+#  1) リポジトリの Settings → Secrets で ANTHROPIC_API_KEY と
+#     DISCORD_WEBHOOK_URL を登録する。
+#  2) 下の cron 間隔を調整する(GitHub の最小は5分、実際は遅延あり)。
+#  3) 状態DB(重複管理)は actions/cache で実行間に引き継ぎ、再通知を防ぐ。
+#
+# 注意: 常駐(watch)ではなく run(1回)を定期実行する構成。真の常駐が必要なら
+#       VPS/コンテナで `python -m yosoku watch` を動かす方が確実。
+
+name: yosoku-sensor
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # 15分ごと
+  workflow_dispatch: {}        # 手動実行も可
+
+# 同時実行を抑止(キャッシュ競合・二重通知の回避)
+concurrency:
+  group: yosoku-sensor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e .
+
+      # 状態DBを実行間で引き継ぐ(同一キーへ毎回保存する restore/save 方式)
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: yosoku_state.db
+          key: yosoku-state
+
+      - name: Run sensor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python -m yosoku --config config.yaml run
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: yosoku_state.db
+          key: yosoku-state-${{ github.run_id }}-${{ github.run_attempt }}

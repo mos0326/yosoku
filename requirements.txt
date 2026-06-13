@@ -1,0 +1,11 @@
+# pip install -r requirements.txt で導入できる依存一覧。
+# pyproject.toml が依存の正本。こちらは簡易導入用。
+anthropic>=0.40
+requests>=2.31
+feedparser>=6.0
+pydantic>=2.5
+PyYAML>=6.0
+yfinance>=0.2.40
+
+# 開発用(テスト)
+pytest>=7.4

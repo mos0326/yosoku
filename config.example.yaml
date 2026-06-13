@@ -1,0 +1,45 @@
+# config.yaml の例。`--config config.yaml` で読み込む。
+# シークレット(APIキー/Webhook)はここには書かず、環境変数で渡すこと。
+
+# 使用モデル(環境変数 YOSOKU_MODEL でも上書き可)
+model: claude-opus-4-8
+
+# 重複管理 DB のパス
+store_path: yosoku_state.db
+
+# watch モードのポーリング間隔(秒)
+poll_interval: 300
+
+tdnet:
+  enabled: true
+  limit: 50
+  # 監視銘柄を絞る場合は証券コードを列挙(空なら全開示が対象)
+  watchlist: []
+  # watchlist: ["7203", "6758", "9984"]
+
+news:
+  enabled: true
+  feeds:
+    - https://www.nhk.or.jp/rss/news/cat5.xml   # NHK 経済
+    # - https://example.com/your-feed.xml
+
+analysis:
+  # 通知する最低スコア(bullish 方向、0〜100)
+  score_threshold: 60
+  # 通知する最低確信度(0〜100)
+  confidence_threshold: 50
+  # yfinance で直近の値動きを分析に添えるか
+  enable_price_context: true
+  # 銘柄を特定できないニュースでも通知するか
+  notify_tickerless: false
+  # 開示の一次キーワードフィルタ(空にすると全開示を分析=コスト増)
+  relevance_keywords:
+    - 決算
+    - 業績予想
+    - 上方修正
+    - 増配
+    - 自己株式
+    - 公開買付
+    - TOB
+    - 業務提携
+    - 受注
