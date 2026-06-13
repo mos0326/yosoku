@@ -170,7 +170,8 @@ def load_config(path: str | None = None) -> Config:
     cfg.discord_webhook_url = os.environ.get(
         "DISCORD_WEBHOOK_URL", cfg.discord_webhook_url
     )
-    cfg.model = os.environ.get("YOSOKU_MODEL", cfg.model)
+    if os.environ.get("YOSOKU_MODEL"):
+        cfg.model = os.environ["YOSOKU_MODEL"]
     if os.environ.get("YOSOKU_TRIAGE_MODEL"):
         cfg.analysis.triage_model = os.environ["YOSOKU_TRIAGE_MODEL"]
 

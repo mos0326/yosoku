@@ -1,9 +1,10 @@
-# yosoku を GitHub Actions 上で定期実行するテンプレート。
+# yosoku を GitHub Actions 上で定期実行するワークフロー。
 #
-# 使い方:
-#  1) リポジトリの Settings → Secrets で ANTHROPIC_API_KEY と
-#     DISCORD_WEBHOOK_URL を登録する。
-#  2) 下の cron 間隔を調整する(GitHub の最小は5分、実際は遅延あり)。
+# 使い方(ブラウザだけで完結):
+#  1) リポジトリの Settings → Secrets and variables → Actions で
+#     ANTHROPIC_API_KEY と DISCORD_WEBHOOK_URL を登録する。
+#     (任意) コストを下げたいなら YOSOKU_MODEL=claude-sonnet-4-6 等も登録。
+#  2) このワークフローはデフォルトブランチ(main)に入っていると自動実行される。
 #  3) 状態DB(重複管理)は actions/cache で実行間に引き継ぎ、再通知を防ぐ。
 #
 # 注意: 常駐(watch)ではなく run(1回)を定期実行する構成。真の常駐が必要なら
@@ -13,8 +14,8 @@ name: yosoku-sensor
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # 15分ごと
-  workflow_dispatch: {}        # 手動実行も可
+    - cron: "*/15 * * * *"   # 15分ごと(GitHubの仕様で多少遅延する)
+  workflow_dispatch: {}        # Actions タブから手動実行も可
 
 # 同時実行を抑止(キャッシュ競合・二重通知の回避)
 concurrency:
@@ -35,22 +36,21 @@ jobs:
       - name: Install
         run: pip install -e .
 
-      # 状態DBを実行間で引き継ぐ(同一キーへ毎回保存する restore/save 方式)
-      - name: Restore state
-        uses: actions/cache/restore@v4
+      # 状態DB(重複管理)を実行間で引き継ぐ。
+      # 毎回ユニークなキーで保存し、restore-keys の前方一致で直近を復元する
+      # ローリング方式。これで「前回までに通知済み」を覚えていられる。
+      - name: Cache state
+        uses: actions/cache@v4
         with:
           path: yosoku_state.db
-          key: yosoku-state
+          key: yosoku-state-${{ github.run_id }}
+          restore-keys: |
+            yosoku-state-
 
       - name: Run sensor
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python -m yosoku --config config.yaml run
-
-      - name: Save state
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: yosoku_state.db
-          key: yosoku-state-${{ github.run_id }}-${{ github.run_attempt }}
+          # 未登録なら空のまま無視され、既定(claude-opus-4-8)になる。
+          YOSOKU_MODEL: ${{ secrets.YOSOKU_MODEL }}
+        run: python -m yosoku run
