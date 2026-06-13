@@ -6,6 +6,8 @@ feedparser>=6.0
 pydantic>=2.5
 PyYAML>=6.0
 yfinance>=0.2.40
+pypdf>=4.0
 
-# 開発用(テスト)
+# 開発用(テスト・Lint)
 pytest>=7.4
+ruff>=0.4

@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 import yaml
 
+# 精査(deep)に使う既定モデル。最高性能を優先。
 DEFAULT_MODEL = "claude-opus-4-8"
+# 全件トリアージに使う安価・高速モデル。
+DEFAULT_TRIAGE_MODEL = "claude-haiku-4-5"
 
 # ニュース RSS の既定フィード。無料かつ比較的安定なものを初期値にしている。
-# 必要に応じて config.yaml の sources.news.feeds で差し替え/追加する。
 DEFAULT_NEWS_FEEDS = [
     "https://www.nhk.or.jp/rss/news/cat5.xml",  # NHK ニュース(経済)
 ]
@@ -47,9 +48,7 @@ DEFAULT_RELEVANCE_KEYWORDS = [
 @dataclass
 class TdnetConfig:
     enabled: bool = True
-    # Yanoshin TDnet WebAPI から取得する直近件数。
     limit: int = 50
-    # 監視銘柄(5桁 or 4桁の証券コード)。指定すると該当コードのみ対象にする。
     watchlist: list[str] = field(default_factory=list)
 
 
@@ -61,82 +60,118 @@ class NewsConfig:
 
 @dataclass
 class AnalysisConfig:
-    # 通知する最低スコア(0〜100、bullish 方向)。
+    # --- 通知しきい値 ---
     score_threshold: int = 60
-    # 通知する最低確信度(0〜100)。
     confidence_threshold: int = 50
-    # yfinance で直近の株価コンテキストを取得して分析に渡すか。
-    enable_price_context: bool = True
-    # 銘柄を特定できないニュースでも通知するか。
-    notify_tickerless: bool = False
-    # 開示の一次キーワードフィルタ(空リストで無効=全件分析)。
+
+    # --- 文脈づけ ---
+    enable_price_context: bool = True  # yfinance の直近値動きを添える
+    fetch_document: bool = True  # 開示PDF本文を抽出して精査に渡す
+    max_document_chars: int = 6000  # 本文の最大文字数
+    enable_web_context: bool = False  # Web検索で追加文脈(実験的)
+
+    # --- 二段階分析(triage -> deep) ---
+    two_stage: bool = True
+    triage_model: str = DEFAULT_TRIAGE_MODEL
+    # トリアージで is_relevant かつ score がこの値以上なら精査へ昇格。
+    triage_escalate_score: int = 30
+    deep_thinking: bool = True  # 精査で adaptive thinking を使う
+
+    # --- 一次キーワードフィルタ ---
     relevance_keywords: list[str] = field(
         default_factory=lambda: list(DEFAULT_RELEVANCE_KEYWORDS)
     )
 
+    # --- 実行制御 ---
+    concurrency: int = 6  # 同時に走らせる分析数
+    max_retries: int = 4  # Anthropic クライアントの再試行回数
+    request_timeout: float = 60.0  # 1 リクエストのタイムアウト(秒)
+
+    notify_tickerless: bool = False  # 銘柄不明のニュースでも通知するか
+
 
 @dataclass
 class Config:
-    anthropic_api_key: Optional[str] = None
-    model: str = DEFAULT_MODEL
-    discord_webhook_url: Optional[str] = None
+    anthropic_api_key: str | None = None
+    model: str = DEFAULT_MODEL  # 精査(deep)モデル
+    discord_webhook_url: str | None = None
     store_path: str = "yosoku_state.db"
-    poll_interval: int = 300  # watch モードのポーリング間隔(秒)
+    poll_interval: int = 300
     tdnet: TdnetConfig = field(default_factory=TdnetConfig)
     news: NewsConfig = field(default_factory=NewsConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
 
 
-def load_config(path: Optional[str] = None) -> Config:
-    """YAML(任意) + 環境変数から Config を組み立てる。
+def _as_int(v, default: int) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
-    YAML が無くても環境変数だけで動作する。
-    """
+
+def load_config(path: str | None = None) -> Config:
+    """YAML(任意) + 環境変数から Config を組み立てる。"""
     data: dict = {}
     if path and os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
     cfg = Config()
     cfg.model = data.get("model", cfg.model)
     cfg.store_path = data.get("store_path", cfg.store_path)
-    cfg.poll_interval = int(data.get("poll_interval", cfg.poll_interval))
+    cfg.poll_interval = _as_int(data.get("poll_interval"), cfg.poll_interval)
 
-    if "tdnet" in data and data["tdnet"] is not None:
+    if data.get("tdnet"):
         t = data["tdnet"]
         cfg.tdnet = TdnetConfig(
             enabled=bool(t.get("enabled", True)),
-            limit=int(t.get("limit", 50)),
+            limit=_as_int(t.get("limit"), 50),
             watchlist=[str(c) for c in (t.get("watchlist") or [])],
         )
 
-    if "news" in data and data["news"] is not None:
+    if data.get("news"):
         n = data["news"]
         cfg.news = NewsConfig(
             enabled=bool(n.get("enabled", True)),
             feeds=list(n.get("feeds") or DEFAULT_NEWS_FEEDS),
         )
 
-    if "analysis" in data and data["analysis"] is not None:
+    if data.get("analysis"):
         a = data["analysis"]
-        cfg.analysis = AnalysisConfig(
-            score_threshold=int(a.get("score_threshold", 60)),
-            confidence_threshold=int(a.get("confidence_threshold", 50)),
-            enable_price_context=bool(a.get("enable_price_context", True)),
-            notify_tickerless=bool(a.get("notify_tickerless", False)),
-            relevance_keywords=(
-                list(a["relevance_keywords"])
-                if a.get("relevance_keywords") is not None
-                else list(DEFAULT_RELEVANCE_KEYWORDS)
-            ),
+        ac = AnalysisConfig()
+        ac.score_threshold = _as_int(a.get("score_threshold"), ac.score_threshold)
+        ac.confidence_threshold = _as_int(
+            a.get("confidence_threshold"), ac.confidence_threshold
         )
+        ac.enable_price_context = bool(
+            a.get("enable_price_context", ac.enable_price_context)
+        )
+        ac.fetch_document = bool(a.get("fetch_document", ac.fetch_document))
+        ac.max_document_chars = _as_int(
+            a.get("max_document_chars"), ac.max_document_chars
+        )
+        ac.enable_web_context = bool(a.get("enable_web_context", ac.enable_web_context))
+        ac.two_stage = bool(a.get("two_stage", ac.two_stage))
+        ac.triage_model = a.get("triage_model", ac.triage_model)
+        ac.triage_escalate_score = _as_int(
+            a.get("triage_escalate_score"), ac.triage_escalate_score
+        )
+        ac.deep_thinking = bool(a.get("deep_thinking", ac.deep_thinking))
+        ac.concurrency = _as_int(a.get("concurrency"), ac.concurrency)
+        ac.max_retries = _as_int(a.get("max_retries"), ac.max_retries)
+        ac.request_timeout = float(a.get("request_timeout", ac.request_timeout))
+        ac.notify_tickerless = bool(a.get("notify_tickerless", ac.notify_tickerless))
+        if a.get("relevance_keywords") is not None:
+            ac.relevance_keywords = list(a["relevance_keywords"])
+        cfg.analysis = ac
 
-    # シークレットは環境変数を最優先(YAML には書かない)。
+    # シークレット/モデルは環境変数を優先。
     cfg.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", cfg.anthropic_api_key)
     cfg.discord_webhook_url = os.environ.get(
         "DISCORD_WEBHOOK_URL", cfg.discord_webhook_url
     )
-    # モデルは環境変数でも上書き可能にしておく。
     cfg.model = os.environ.get("YOSOKU_MODEL", cfg.model)
+    if os.environ.get("YOSOKU_TRIAGE_MODEL"):
+        cfg.analysis.triage_model = os.environ["YOSOKU_TRIAGE_MODEL"]
 
     return cfg

@@ -1,100 +1,220 @@
-"""分析(Claude).
+"""分析(Claude) — 二段階・非同期.
 
-各イベント(決算開示・ニュース)を Claude に渡し、「上がりそうか」を
-構造化出力(`Analysis`)として判定させる。
+性能と精度を両立するため、2段階で評価する:
 
-- 構造化出力 (`messages.parse` + `output_format`) でスキーマを保証。
-- システムプロンプトは慎重な日本株アナリスト像。過度に強気にならないよう校正。
-- モデルは既定で claude-opus-4-8。大量処理のコストを抑えたい場合は
-  環境変数 YOSOKU_MODEL や config の model で sonnet/haiku へ変更可能。
+1. **triage**: 安価・高速モデル(既定 haiku)で全候補を素早くスクリーニング。
+   見出し(+短い本文)だけを見て関連性と概算スコアを出す。
+2. **deep**: triage で有望と判定されたものだけ、高性能モデル(既定 opus 4.8)で精査。
+   開示PDF本文・直近の値動き・(任意で)Web文脈を与え、adaptive thinking で推論。
+
+これにより「大量の開示を安く捌きつつ、効きそうな少数に推論コストを集中」できる。
+非同期(`AsyncAnthropic`)なのでパイプライン側からセマフォで並列実行する。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Optional
+from dataclasses import dataclass
 
 import anthropic
 
 from yosoku.config import Config
+from yosoku.metrics import UsageTracker
 from yosoku.models import Analysis, RawEvent
+from yosoku.research import gather_web_context
+from yosoku.sources.document import fetch_document_text
 from yosoku.sources.prices import price_context, to_yahoo_ticker
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
+TRIAGE_SYSTEM = """\
+あなたは日本株の材料を高速にスクリーニングするアシスタントです。
+適時開示やニュースの見出し(と短い本文)を読み、対象企業の株価を**短期的に\
+押し上げる材料**になりうるかを手早く判定します。
+- 確実性より網羅性を優先し、少しでも上昇材料になりそうなら score を高めに。
+- 銘柄を特定できない一般ニュースは is_relevant=false。
+- 後段で精査するので、ここでは素早く粗く判断してよい。"""
+
+DEEP_SYSTEM = """\
 あなたは日本株を担当する経験豊富なバイサイド・アナリストです。
-適時開示(TDnet)やニュースの1件を読み、その内容が対象企業の**株価を短期的に\
-押し上げる材料**になりそうかを冷静に評価します。
+与えられた適時開示・ニュース(本文・直近の値動きを含む)を精読し、その内容が\
+対象企業の**短期的な株価**を押し上げる材料かを、根拠に基づいて厳密に評価します。
 
 評価の指針:
-- 事実(増益・上方修正・増配・自社株買い・大型受注・提携など)に基づき、\
-  ポジティブ/ネガティブ/中立を判断する。
-- 既に織り込み済みと思われる内容、観測記事、定型的な開示(単元株変更や\
-  事務的訂正など)は中立寄り・低スコアにする。
-- 過度に強気にならない。確証が弱ければ confidence を低くする。
-- ニュースで特定の1銘柄に紐づけられない(市場全体の話題など)場合は\
-  is_relevant を false にする。
+- 開示本文の数値(売上・営業利益・経常/純利益・通期予想・進捗率・配当・\
+  自己株取得枠など)を読み取り、市場予想やコンセンサスに対するサプライズの\
+  方向と大きさを推定する。
+- 「上方修正」「増配」「大型受注」「自社株買い」「提携・M&A」「好決算」は\
+  ポジティブ材料になりやすい。逆に「下方修正」「減配」「希薄化を伴う増資」は\
+  ネガティブ。
+- 既に株価に織り込み済みと思われるもの、観測記事、定型的・事務的な開示\
+  (単元株変更、軽微な訂正、代表者異動の事務連絡など)は中立寄り・低スコア。
+- 直近で既に大きく上昇している場合は出尽くし/材料織り込みの可能性も考慮する。
+- 過度に強気にならない。根拠が弱ければ confidence を下げる。
 - score は -100〜+100、confidence は 0〜100。
-- rationale と key_factors は日本語で簡潔に書く。"""
+- rationale と key_factors は日本語で、数値や事実を引用しつつ簡潔に書く。"""
 
 
-class Analyzer:
-    def __init__(self, config: Config, client: Optional[anthropic.Anthropic] = None) -> None:
+@dataclass
+class AnalysisOutcome:
+    analysis: Analysis
+    stage: str  # "triage" or "deep"
+
+
+class TieredAnalyzer:
+    def __init__(
+        self,
+        config: Config,
+        client: anthropic.AsyncAnthropic | None = None,
+        usage: UsageTracker | None = None,
+    ) -> None:
         self.config = config
-        # client 未指定なら環境変数(ANTHROPIC_API_KEY)から生成。
-        self.client = client or anthropic.Anthropic(api_key=config.anthropic_api_key)
+        self.usage = usage or UsageTracker()
+        self.client = client or anthropic.AsyncAnthropic(
+            api_key=config.anthropic_api_key,
+            max_retries=config.analysis.max_retries,
+            timeout=config.analysis.request_timeout,
+        )
 
-    def _build_user_prompt(self, event: RawEvent) -> str:
-        lines = [
-            f"ソース: {event.source}",
-            f"見出し: {event.title}",
-        ]
+    async def aclose(self) -> None:
+        try:
+            await self.client.close()
+        except Exception:  # クローズ失敗は無視
+            pass
+
+    # ---- 公開API --------------------------------------------------------
+
+    async def analyze(self, event: RawEvent) -> AnalysisOutcome | None:
+        """1件を評価する。失敗時は None(次サイクルで再試行)。"""
+        a = self.config.analysis
+
+        if not a.two_stage:
+            await self._enrich_for_deep(event)
+            deep = await self._call(event, model=self.config.model, deep=True)
+            return AnalysisOutcome(deep, "deep") if deep else None
+
+        # 1) triage
+        triage = await self._call(event, model=a.triage_model, deep=False)
+        if triage is None:
+            return None
+        escalate = triage.is_relevant and triage.score >= a.triage_escalate_score
+        if not escalate:
+            return AnalysisOutcome(triage, "triage")
+
+        # 2) deep(本文・値動き・Web文脈を付与して精査)
+        await self._enrich_for_deep(event)
+        deep = await self._call(event, model=self.config.model, deep=True)
+        if deep is None:
+            # 精査に失敗したら triage 結果にフォールバック(取りこぼし防止)。
+            return AnalysisOutcome(triage, "triage")
+        return AnalysisOutcome(deep, "deep")
+
+    # ---- 内部 -----------------------------------------------------------
+
+    async def _enrich_for_deep(self, event: RawEvent) -> None:
+        """精査前に開示PDF本文・Web文脈を(必要なら)取得して event に載せる。"""
+        a = self.config.analysis
+        if (
+            a.fetch_document
+            and event.document_text is None
+            and event.url
+            and ".pdf" in (event.url or "").lower()
+        ):
+            text = await asyncio.to_thread(
+                fetch_document_text, event.url, a.max_document_chars
+            )
+            if text:
+                event.document_text = text
+
+        if a.enable_web_context and not event.extra.get("web_context"):
+            ctx = await gather_web_context(
+                self.client, event, model=self.config.model, usage=self.usage
+            )
+            if ctx:
+                event.extra["web_context"] = ctx
+
+    def _build_user_prompt(self, event: RawEvent, deep: bool) -> str:
+        lines = [f"ソース: {event.source}", f"見出し: {event.title}"]
         if event.company_name:
             lines.append(f"企業名: {event.company_name}")
         if event.company_code:
-            ticker = to_yahoo_ticker(event.company_code)
-            lines.append(f"証券コード: {event.company_code}（{ticker}）")
+            lines.append(
+                f"証券コード: {event.company_code}（{to_yahoo_ticker(event.company_code)}）"
+            )
         if event.published_at:
             lines.append(f"開示時刻: {event.published_at:%Y-%m-%d %H:%M}")
         if event.body:
-            lines.append(f"本文/要約: {event.body[:1500]}")
-        if event.url:
-            lines.append(f"URL: {event.url}")
-
-        # 直近の値動きを添える(設定 ON かつコードが分かる場合のみ)。
-        if self.config.analysis.enable_price_context and event.company_code:
-            ticker = to_yahoo_ticker(event.company_code)
-            if ticker:
-                ctx = price_context(ticker)
-                if ctx:
-                    lines.append(f"直近の値動き: {ctx}")
-
+            limit = 1500 if deep else 400
+            lines.append(f"本文/要約: {event.body[:limit]}")
+        if deep and event.document_text:
+            lines.append(f"\n--- 開示本文(抜粋) ---\n{event.document_text}\n---")
+        if deep and event.extra.get("web_context"):
+            lines.append(f"\n--- 参考(Web) ---\n{event.extra['web_context']}\n---")
         lines.append(
             "\n上記が対象銘柄の株価を短期的に押し上げる材料になりそうかを判定してください。"
         )
         return "\n".join(lines)
 
-    def analyze(self, event: RawEvent) -> Optional[Analysis]:
-        """1件のイベントを分析する。失敗時は None。"""
+    async def _add_price_context(self, event: RawEvent, lines_holder: list[str]) -> None:
+        if not self.config.analysis.enable_price_context or not event.company_code:
+            return
+        ticker = to_yahoo_ticker(event.company_code)
+        if not ticker:
+            return
+        ctx = await asyncio.to_thread(price_context, ticker)
+        if ctx:
+            lines_holder.append(f"直近の値動き: {ctx}")
+
+    async def _call(
+        self, event: RawEvent, model: str, deep: bool
+    ) -> Analysis | None:
+        prompt_lines = [self._build_user_prompt(event, deep)]
+        if deep:
+            # 値動きはブロッキングなので別スレッドで取得して末尾に足す。
+            extra: list[str] = []
+            await self._add_price_context(event, extra)
+            if extra:
+                prompt_lines.append("\n".join(extra))
+        user_content = "\n".join(prompt_lines)
+
+        kwargs: dict = {
+            "model": model,
+            "max_tokens": 4096 if (deep and self.config.analysis.deep_thinking) else 1024,
+            "messages": [{"role": "user", "content": user_content}],
+            "output_format": Analysis,
+        }
+        if deep:
+            # システムプロンプトはキャッシュ可能ブロックにしておく(前方互換)。
+            kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": DEEP_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+            if self.config.analysis.deep_thinking:
+                kwargs["thinking"] = {"type": "adaptive"}
+        else:
+            kwargs["system"] = TRIAGE_SYSTEM
+
         try:
-            response = self.client.messages.parse(
-                model=self.config.model,
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": self._build_user_prompt(event)}],
-                output_format=Analysis,
-            )
+            response = await self.client.messages.parse(**kwargs)
         except anthropic.APIError as e:
-            logger.error("Claude 分析に失敗(%s): %s", event.event_id, e)
+            logger.error("Claude 分析失敗(%s, %s): %s", event.event_id, model, e)
+            return None
+        except Exception as e:  # 構造化出力のパース失敗など
+            logger.warning("分析の応答処理に失敗(%s, %s): %s", event.event_id, model, e)
             return None
 
-        analysis = response.parsed_output
+        self.usage.add(model, getattr(response, "usage", None))
+
+        analysis = getattr(response, "parsed_output", None)
         if analysis is None:
-            logger.warning("構造化出力のパースに失敗: %s", event.event_id)
+            logger.warning("構造化出力が空: %s (%s)", event.event_id, model)
             return None
 
-        # 開示で証券コードが分かっていてモデルが ticker を埋めていない場合は補完。
+        # 開示で分かっている情報で補完。
         if analysis.ticker is None and event.company_code:
             analysis.ticker = to_yahoo_ticker(event.company_code)
         if analysis.company_name is None and event.company_name:

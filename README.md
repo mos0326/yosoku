@@ -2,31 +2,43 @@
 
 上場企業の**適時開示（決算・業績修正・配当・自社株買い 等）**やニュースを
 リアルタイムに取り込み、**Claude（LLM）**が「短期的に株価を押し上げる材料か」を
-判定し、シグナルを **Discord** に通知する MVP です。
+判定し、シグナルを **Discord** に通知する高性能センサーです。
 
 > ⚠️ **免責**: 本ソフトウェアは情報提供・技術検証を目的としたもので、投資助言では
 > ありません。LLM の判定は誤りを含みます。実際の売買は自己責任で行ってください。
+
+## ハイライト
+
+- ⚡ **非同期・並列**: 複数ソースを並行取得し、分析はセマフォで並列実行。
+- 🧠 **二段階分析**: 安価モデル（haiku）で**全件トリアージ** → 有望なものだけ
+  高性能モデル（opus 4.8）＋ **adaptive thinking** で精査。精度とコストを両立。
+- 📄 **開示本文を解析**: TDnet の開示PDFを抽出し、見出しだけでなく**実数値**で判断。
+- 💰 **コスト可観測**: 実行ごとにトークン・概算コストを集計。
+- 🗃 **履歴 & バックテスト**: 全シグナルを保存。過去レンジで**判定品質を検証**できる。
 
 ---
 
 ## 仕組み
 
 ```
-                ┌─────────── 収集 ───────────┐
-  TDnet 適時開示 ─┤ TdnetSource (Yanoshin API)│
-  ニュース RSS  ─┤ NewsRssSource             │
-                └────────────┬──────────────┘
-                             ▼
-                   一次キーワードフィルタ        ← コスト削減(任意)
-                             ▼
-                     重複排除 (SQLite)           ← 再通知を防ぐ
-                             ▼
-            分析: Claude messages.parse → Analysis  ← 構造化出力で判定
-              ( + yfinance の直近値動きを文脈に添付 )
-                             ▼
-                   通知判定 (score/confidence)
-                             ▼
-                  Discord Webhook で通知
+        ┌─────────── 収集(並列) ───────────┐
+TDnet ──┤ TdnetSource (Yanoshin API)        │
+News  ──┤ NewsRssSource (RSS)               │
+        └───────────────┬───────────────────┘
+                        ▼
+              一次キーワードフィルタ            ← LLM前にコスト削減(任意)
+                        ▼
+                重複排除 (SQLite)               ← 再通知を防ぐ
+                        ▼
+        ┌── 分析: TieredAnalyzer (非同期/並列) ──┐
+        │  triage  : haiku で全候補を粗くスコア   │
+        │   └─昇格→ deep: opus 4.8 + thinking     │
+        │            + 開示PDF本文 + 直近値動き    │
+        └───────────────┬───────────────────────┘
+                        ▼
+              通知判定 (score/confidence)
+                        ▼
+          Discord 通知 + シグナル履歴(SQLite)
 ```
 
 判定結果（`Analysis`）は構造化出力で次の形に拘束されます:
@@ -49,18 +61,17 @@
 
 | ソース | 取得元 | 備考 |
 |---|---|---|
-| 適時開示 | [Yanoshin TDnet WebAPI](https://webapi.yanoshin.jp/)（無料） | **主シグナル**。各開示に証券コードが付くので銘柄が確定する。準リアルタイム。 |
+| 適時開示 | [Yanoshin TDnet WebAPI](https://webapi.yanoshin.jp/)（無料） | **主シグナル**。各開示に証券コードが付く。準リアルタイム。PDF本文も精査で取得。 |
 | ニュース | RSS（既定: NHK 経済） | 補助。銘柄特定は Claude に委ねる。フィードは差し替え可。 |
-| 株価文脈 | yfinance（無料・遅延あり） | 直近の値動きを分析プロンプトに添える。取得失敗してもスキップ。 |
+| 株価文脈 | yfinance（無料・遅延あり） | 直近の値動きを精査プロンプトに添える。取得失敗してもスキップ。 |
 
 > **リアルタイム価格について**: 真のリアルタイム板情報は証券口座必須・有料が中心です。
-> 本MVPは「決算・開示・ニュースという“材料”の検知」を主眼にし、価格はyfinanceの
-> 準リアルタイム値で文脈付けします。本格運用ではJ-QuantsやkabuステーションAPI等への
+> 本システムは「決算・開示・ニュースという“材料”の検知」を主眼にし、価格は yfinance の
+> 準リアルタイム値で文脈付けします。本格運用では J-Quants / kabuステーションAPI 等への
 > 差し替えを想定（`yosoku/sources/` に新ソースを追加するだけ）。
 
-> **ネットワーク**: 実行環境のegressポリシーによっては一部フィードがブロックされます
-> （例: 制限環境では `nhk.or.jp` が 403）。その場合はWARNINGログを出して継続します。
-> 到達可能なフィードに差し替えてください。
+> **ネットワーク**: 実行環境の egress ポリシーによっては一部フィード/PDFがブロックされます。
+> その場合は WARNING ログを出して継続します（致命的でない）。到達可能な経路に差し替えてください。
 
 ---
 
@@ -68,19 +79,20 @@
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt          # もしくは: pip install -e ".[dev]"
+pip install -e ".[dev]"     # もしくは: pip install -r requirements.txt
 ```
 
-シークレットは環境変数で渡します（`.env.example` を参照）:
+シークレットは環境変数で渡します（`.env.example` 参照）:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 export DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxxx/yyyy
-# 任意: モデル変更（既定 claude-opus-4-8）
-# export YOSOKU_MODEL=claude-sonnet-4-6
+# 任意: モデル変更
+# export YOSOKU_MODEL=claude-opus-4-8         # 精査モデル
+# export YOSOKU_TRIAGE_MODEL=claude-haiku-4-5 # トリアージモデル
 ```
 
-設定は任意で YAML（`config.example.yaml` をコピーして使用）:
+設定は任意で YAML（`config.example.yaml` をコピー）:
 
 ```bash
 cp config.example.yaml config.yaml
@@ -94,7 +106,7 @@ cp config.example.yaml config.yaml
 # 収集だけ試す（APIキー不要・疎通確認）
 python -m yosoku sources --limit 10
 
-# 1回だけ実行。通知せずシグナルを表示（APIキーのみ必要）
+# 1回だけ実行。通知せずシグナル＋コストを表示（APIキーのみ必要）
 python -m yosoku --config config.yaml run --dry-run
 
 # 1回実行して Discord に通知
@@ -102,59 +114,94 @@ python -m yosoku --config config.yaml run
 
 # 常駐してポーリング（既定300秒間隔）
 python -m yosoku --config config.yaml watch --interval 300
+
+# 過去シグナルの一覧
+python -m yosoku history --limit 20
+
+# バックテスト: 過去レンジを分析し、その後のリターンで判定品質を評価
+python -m yosoku backtest 20260601 20260607 --horizon 5
 ```
 
-`-v` でデバッグログ。`yosoku` コマンドとしてもインストールされます（`yosoku run` 等）。
+`-v` でデバッグログ。`yosoku` コマンドとしてもインストールされます。
 
 ---
 
-## 設定（config.yaml）
+## 二段階分析とコスト
 
-主な項目（全項目は `config.example.yaml`）:
+開示は1日数百件出ます。全件を高性能モデルに通すと高コストなので:
 
-- `model`: 使用モデル。既定 `claude-opus-4-8`。
-- `tdnet.watchlist`: 監視銘柄を絞る場合に証券コードを列挙（空＝全開示）。
-- `news.feeds`: ニュースRSSのURL一覧。
-- `analysis.score_threshold` / `confidence_threshold`: 通知しきい値。
-- `analysis.relevance_keywords`: 開示の一次フィルタ。**空にすると全開示をLLM分析**
-  （件数が多くコスト増）。既定は決算・上方修正・配当・TOB 等に限定。
-- `analysis.enable_price_context`: yfinanceで値動きを添えるか。
-- `analysis.notify_tickerless`: 銘柄不明のニュースでも通知するか（既定 false）。
+1. **triage**（既定 `claude-haiku-4-5`, 安価）で全候補を粗くスコアリング。
+2. `is_relevant` かつ `triage_escalate_score`(既定30) 以上のものだけ
+   **deep**（既定 `claude-opus-4-8` + adaptive thinking + 開示本文）で精査。
 
-### コストについて
+さらに `relevance_keywords`（既定 ON）で LLM 前に明らかな非材料を落とします。
+実行ごとに `usage:` 行で各モデルのトークンと概算コスト($)を表示します。
 
-既定モデル `claude-opus-4-8` は高性能な分、入出力単価が高めです。開示は1日数百件
-出るため、**一次キーワードフィルタ**で分析対象を絞るのが現実的です。さらにコストを
-下げたい場合は `YOSOKU_MODEL=claude-sonnet-4-6`（または `claude-haiku-4-5`）に
-切り替えてください。
+| 調整 | 効果 |
+|---|---|
+| `relevance_keywords: []` | 一次フィルタ無効＝より純粋に LLM 判定（コスト増） |
+| `two_stage: false` | 全件を deep モデルで分析（高コスト・最精度） |
+| `YOSOKU_MODEL=claude-sonnet-4-6` | 精査モデルを安価側に |
+| `deep_thinking: false` | 拡張思考オフで高速・低コスト |
+| `enable_web_context: true` | Web検索で文脈強化（実験的・コスト増） |
+
+---
+
+## 設定
+
+主な項目（全項目は `config.example.yaml`）。`analysis` 配下に二段階・並列・本文抽出の
+ノブが揃っています（`two_stage` / `triage_model` / `concurrency` / `fetch_document` 等）。
+
+### コスト目安
+
+`claude-opus-4-8` は $5/$25 per 1M tok、`claude-haiku-4-5` は $1/$5 per 1M tok。
+トリアージは見出し中心で1件あたり数百トークン、精査は本文込みで数千トークン程度。
+二段階＋一次フィルタにより、大半の開示は安価なトリアージだけで処理されます。
 
 ---
 
 ## 拡張
 
-新しいデータソースは `yosoku/sources/base.py` の `Source` を実装し、
-`RawEvent` のリストを返す `fetch()` を用意して `pipeline.build_sources()` に
-追加するだけです（例: J-Quants、EDINET、kabuステーションAPI）。
-
-通知先を増やす場合は `notifier.py` と同じ `notify(signal) -> bool` を持つ
-クラスを用意し、`build_pipeline()` で差し込みます（Slack / LINE / Email 等）。
+- **データソース追加**: `yosoku/sources/base.py` の `Source` を実装し
+  `pipeline.build_sources()` に追加（例: J-Quants、EDINET、kabuステーションAPI）。
+- **通知先追加**: `notify(signal) -> bool` を持つクラスを作り `build_pipeline()` で差し込む
+  （Slack / LINE / Email 等）。
 
 ---
 
-## テスト
-
-ネットワーク・API不要のユニットテストを同梱しています:
+## テスト・Lint
 
 ```bash
 pip install -e ".[dev]"
-pytest -q
+pytest -q        # 37件。ネットワーク・APIキー不要
+ruff check .
 ```
 
 - `test_tdnet` / `test_news`: パーサのスキーマ変換
+- `test_document`: 開示PDF本文の抽出（実PDFを生成して検証）
 - `test_prices`: 証券コード→ティッカー変換
-- `test_store`: SQLite 重複排除
-- `test_analyzer`: 分析後処理（Claudeクライアントはモック）
-- `test_pipeline`: 一次フィルタ・通知判定・重複排除の統合
+- `test_store`: SQLite 重複排除・シグナル履歴
+- `test_metrics`: トークン/コスト集計
+- `test_analyzer`: 二段階分析（Async Claude クライアントはモック）
+- `test_backtest`: スコア帯別の集計
+- `test_pipeline`: 一次フィルタ・並列実行・通知判定・重複排除の統合
+
+CI（`.github/workflows/ci.yml`）で push/PR ごとに ruff + pytest を実行します。
+
+---
+
+## Claude Code on the web
+
+`.claude/hooks/session-start.sh` が依存を自動導入します。有効化するには
+`.claude/settings.json.example` を `.claude/settings.json` にコピーしてください。
+
+---
+
+## デプロイ(常駐 / 定期実行)
+
+- **常駐**: VPS/コンテナで `python -m yosoku watch`。
+- **定期実行**: `.github/workflows/sensor.yml`（テンプレート）。状態DBを actions/cache で
+  引き継ぎ再通知を防止。Secrets に `ANTHROPIC_API_KEY` / `DISCORD_WEBHOOK_URL` を登録。
 
 ---
 
@@ -162,15 +209,19 @@ pytest -q
 
 ```
 yosoku/
-├── config.py          設定ロード(YAML + 環境変数)
+├── config.py          設定(YAML + 環境変数)
 ├── models.py          RawEvent / Analysis / Signal
 ├── sources/
 │   ├── tdnet.py       適時開示(Yanoshin TDnet WebAPI)
 │   ├── news_rss.py    ニュースRSS
-│   └── prices.py      証券コード変換 + yfinance 値動き
-├── analyzer.py        Claude による判定(構造化出力)
+│   ├── prices.py      証券コード変換 + yfinance 値動き
+│   └── document.py    開示PDF本文の抽出(pypdf)
+├── analyzer.py        二段階・非同期の Claude 判定
+├── research.py        Web検索による追加文脈(任意)
+├── metrics.py         トークン/コスト集計
 ├── notifier.py        Discord Webhook
-├── store.py           重複管理(SQLite)
-├── pipeline.py        収集→分析→通知のオーケストレーション
+├── store.py           SQLite(重複 + 履歴)
+├── pipeline.py        収集→分析→通知のオーケストレーション(非同期)
+├── backtest.py        判定品質の検証
 └── cli.py             コマンドライン
 ```

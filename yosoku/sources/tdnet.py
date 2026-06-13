@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 import requests
 
@@ -26,9 +25,11 @@ logger = logging.getLogger(__name__)
 RECENT_URL = "https://webapi.yanoshin.jp/webapi/tdnet/list/recent.json"
 # 単一銘柄の開示一覧(証券コード指定)。{code} は4桁 or 5桁コード。
 CODE_URL = "https://webapi.yanoshin.jp/webapi/tdnet/list/{code}.json"
+# 日付範囲(バックテスト用)。{range} は "YYYYMMDD-YYYYMMDD" 等。
+RANGE_URL = "https://webapi.yanoshin.jp/webapi/tdnet/list/{range}.json"
 
 
-def _parse_pubdate(raw: Optional[str]) -> Optional[datetime]:
+def _parse_pubdate(raw: str | None) -> datetime | None:
     if not raw:
         return None
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d"):
@@ -88,9 +89,9 @@ class TdnetSource(Source):
     def __init__(
         self,
         limit: int = 50,
-        watchlist: Optional[list[str]] = None,
+        watchlist: list[str] | None = None,
         timeout: float = 15.0,
-        session: Optional[requests.Session] = None,
+        session: requests.Session | None = None,
     ) -> None:
         self.limit = limit
         self.watchlist = [str(c).strip() for c in (watchlist or [])]
@@ -127,3 +128,21 @@ class TdnetSource(Source):
             except (requests.RequestException, ValueError) as e:
                 logger.warning("TDnet(%s) の取得に失敗: %s", code, e)
         return events
+
+    def fetch_range(self, start: str, end: str, limit: int = 1000) -> list[RawEvent]:
+        """日付範囲の開示を取得する(バックテスト用)。
+
+        start/end は "YYYYMMDD"。Yanoshin の "YYYYMMDD-YYYYMMDD" 形式を使う。
+        """
+        rng = f"{start}-{end}"
+        try:
+            resp = self.session.get(
+                RANGE_URL.format(range=rng),
+                params={"limit": limit},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return parse_items(resp.json())
+        except (requests.RequestException, ValueError) as e:
+            logger.warning("TDnet 範囲取得(%s)に失敗: %s", rng, e)
+            return []

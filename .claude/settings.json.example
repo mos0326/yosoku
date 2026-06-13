@@ -1,0 +1,15 @@
+{
+  "_comment": "Claude Code on the web で依存を自動導入する SessionStart フックの登録例。有効化するにはこのファイルを .claude/settings.json にコピーしてください(.claude/hooks/session-start.sh が実行されます)。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,5 @@
 from yosoku.sources.tdnet import parse_items
 
-
 SAMPLE = {
     "total_count": 2,
     "items": [

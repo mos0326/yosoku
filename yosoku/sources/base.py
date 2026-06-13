@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import asyncio
 
 from yosoku.models import RawEvent
 
@@ -10,8 +11,8 @@ from yosoku.models import RawEvent
 class Source(abc.ABC):
     """イベントを供給するソースの共通インターフェース。
 
-    `fetch()` は「直近のイベント一覧(新しい→古い順は問わない)」を返す。
-    重複排除はパイプライン側(store)で行うので、ソースは取得に専念する。
+    `fetch()` は同期取得。`fetch_async()` は既定で `fetch` を別スレッドに
+    逃がすラッパで、複数ソースを並行取得するのに使う。
     """
 
     name: str = "base"
@@ -19,3 +20,6 @@ class Source(abc.ABC):
     @abc.abstractmethod
     def fetch(self) -> list[RawEvent]:  # pragma: no cover - 抽象メソッド
         raise NotImplementedError
+
+    async def fetch_async(self) -> list[RawEvent]:
+        return await asyncio.to_thread(self.fetch)

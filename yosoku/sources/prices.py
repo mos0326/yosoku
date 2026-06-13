@@ -8,12 +8,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-def to_yahoo_ticker(company_code: str) -> Optional[str]:
+def to_yahoo_ticker(company_code: str) -> str | None:
     """TSE の証券コードを yfinance 用ティッカー(例 '7203.T')へ変換する。
 
     TDnet は5桁コード(例 "72030")で返す。末尾が "0" の純数字5桁は
@@ -30,7 +29,7 @@ def to_yahoo_ticker(company_code: str) -> Optional[str]:
     return f"{code}.T"
 
 
-def price_context(ticker: str, lookback_days: int = 30) -> Optional[str]:
+def price_context(ticker: str, lookback_days: int = 30) -> str | None:
     """直近の値動きを1行サマリにして返す。失敗時は None。
 
     yfinance(と pandas)は重く外部 I/O に依存するため、遅延 import + 例外握りつぶし。

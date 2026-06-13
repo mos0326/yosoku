@@ -11,7 +11,6 @@ import hashlib
 import logging
 from datetime import datetime
 from time import mktime
-from typing import Optional
 
 import feedparser
 
@@ -26,11 +25,11 @@ def _entry_id(entry: dict, feed_url: str) -> str:
     raw = entry.get("id") or entry.get("link") or entry.get("title") or ""
     if not raw:
         return ""
-    digest = hashlib.sha1(f"{feed_url}|{raw}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(f"{feed_url}|{raw}".encode()).hexdigest()[:16]
     return f"news:{digest}"
 
 
-def _entry_time(entry: dict) -> Optional[datetime]:
+def _entry_time(entry: dict) -> datetime | None:
     for key in ("published_parsed", "updated_parsed"):
         t = entry.get(key)
         if t:

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,13 +26,15 @@ class RawEvent(BaseModel):
     source: str
     event_id: str
     title: str
-    body: Optional[str] = None
-    url: Optional[str] = None
+    body: str | None = None
+    url: str | None = None
     # TSE の証券コード。TDnet は5桁(例 "72030")で来る。yfinance 用の
     # 4桁コードへの変換は sources.prices.to_yahoo_ticker が行う。
-    company_code: Optional[str] = None
-    company_name: Optional[str] = None
-    published_at: Optional[datetime] = None
+    company_code: str | None = None
+    company_name: str | None = None
+    published_at: datetime | None = None
+    # 精査ステージで埋める開示PDF本文(抽出テキスト)。
+    document_text: str | None = None
     # ソース固有の付加情報(開示種別フラグ、XBRL URL 等)。
     extra: dict = Field(default_factory=dict)
 
@@ -50,12 +52,12 @@ class Analysis(BaseModel):
         description="特定の1銘柄に紐づく売買シグナルとして意味があるなら true。"
         "市場全体の一般ニュースなど銘柄を特定できない場合は false。"
     )
-    ticker: Optional[str] = Field(
+    ticker: str | None = Field(
         default=None,
         description="識別できる場合の Yahoo Finance ティッカー(例 '7203.T')。"
         "不明なら null。",
     )
-    company_name: Optional[str] = Field(default=None, description="対象企業名(分かれば)。")
+    company_name: str | None = Field(default=None, description="対象企業名(分かれば)。")
     direction: Direction = Field(description="株価への方向性: bullish/bearish/neutral。")
     score: int = Field(
         description="-100(強い下落) 〜 +100(強い上昇)。0 は中立。",
@@ -75,9 +77,11 @@ class Signal(BaseModel):
 
     event: RawEvent
     analysis: Analysis
+    # 最終結果がどの段階で出たか("triage" / "deep")。
+    stage: str = "deep"
 
     @property
-    def display_ticker(self) -> Optional[str]:
+    def display_ticker(self) -> str | None:
         """通知に出すティッカー。分析結果を優先し、無ければイベント側から導出。"""
         if self.analysis.ticker:
             return self.analysis.ticker
@@ -88,5 +92,5 @@ class Signal(BaseModel):
         return None
 
     @property
-    def display_name(self) -> Optional[str]:
+    def display_name(self) -> str | None:
         return self.analysis.company_name or self.event.company_name

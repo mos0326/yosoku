@@ -1,21 +1,16 @@
 # config.yaml の例。`--config config.yaml` で読み込む。
 # シークレット(APIキー/Webhook)はここには書かず、環境変数で渡すこと。
 
-# 使用モデル(環境変数 YOSOKU_MODEL でも上書き可)
+# 精査(deep)に使うモデル(環境変数 YOSOKU_MODEL でも上書き可)
 model: claude-opus-4-8
 
-# 重複管理 DB のパス
-store_path: yosoku_state.db
-
-# watch モードのポーリング間隔(秒)
-poll_interval: 300
+store_path: yosoku_state.db   # 重複管理・履歴 DB
+poll_interval: 300            # watch のポーリング間隔(秒)
 
 tdnet:
   enabled: true
   limit: 50
-  # 監視銘柄を絞る場合は証券コードを列挙(空なら全開示が対象)
-  watchlist: []
-  # watchlist: ["7203", "6758", "9984"]
+  watchlist: []               # 例: ["7203", "6758", "9984"](空なら全開示)
 
 news:
   enabled: true
@@ -24,15 +19,29 @@ news:
     # - https://example.com/your-feed.xml
 
 analysis:
-  # 通知する最低スコア(bullish 方向、0〜100)
-  score_threshold: 60
-  # 通知する最低確信度(0〜100)
-  confidence_threshold: 50
-  # yfinance で直近の値動きを分析に添えるか
-  enable_price_context: true
-  # 銘柄を特定できないニュースでも通知するか
-  notify_tickerless: false
-  # 開示の一次キーワードフィルタ(空にすると全開示を分析=コスト増)
+  # --- 通知しきい値 ---
+  score_threshold: 60         # bullish スコアの最低値(0〜100)
+  confidence_threshold: 50    # 確信度の最低値(0〜100)
+  notify_tickerless: false    # 銘柄不明のニュースでも通知するか
+
+  # --- 文脈づけ ---
+  enable_price_context: true  # yfinance の直近値動きを精査に添える
+  fetch_document: true        # 開示PDF本文を抽出して精査に渡す(精度↑)
+  max_document_chars: 6000
+  enable_web_context: false   # Web検索で追加文脈(実験的・コスト増)
+
+  # --- 二段階分析(triage → deep) ---
+  two_stage: true             # false にすると全件を deep モデルで分析(高コスト)
+  triage_model: claude-haiku-4-5
+  triage_escalate_score: 30   # triage でこのスコア以上なら deep へ昇格
+  deep_thinking: true         # 精査で adaptive thinking を使う
+
+  # --- 実行制御 ---
+  concurrency: 6              # 同時分析数
+  max_retries: 4
+  request_timeout: 60
+
+  # --- 一次キーワードフィルタ(空にすると全開示を分析=コスト増) ---
   relevance_keywords:
     - 決算
     - 業績予想

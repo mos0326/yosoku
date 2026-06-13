@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import requests
 
@@ -61,7 +60,7 @@ class DiscordNotifier:
         self,
         webhook_url: str,
         timeout: float = 10.0,
-        session: Optional[requests.Session] = None,
+        session: requests.Session | None = None,
     ) -> None:
         self.webhook_url = webhook_url
         self.timeout = timeout
