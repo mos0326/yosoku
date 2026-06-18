@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS signals (
     raw          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(score);
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -62,6 +66,20 @@ class Store:
         self._conn.execute(
             "INSERT OR IGNORE INTO seen (event_id, source, notified) VALUES (?, ?, ?)",
             (event_id, source, 1 if notified else 0),
+        )
+        self._conn.commit()
+
+    # ---- meta(状態フラグ) ---------------------------------------------
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
         )
         self._conn.commit()
 

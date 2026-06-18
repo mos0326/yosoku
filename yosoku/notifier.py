@@ -80,3 +80,16 @@ class DiscordNotifier:
         except requests.RequestException as e:
             logger.error("Discord 通知に失敗: %s", e)
             return False
+
+    def notify_text(self, content: str) -> bool:
+        """プレーンなテキストメッセージを送る(接続テスト・稼働通知用)。"""
+        try:
+            resp = self.session.post(
+                self.webhook_url, json={"content": content}, timeout=self.timeout
+            )
+            resp.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            logger.error("Discord 送信に失敗: %s", e)
+            return False
+

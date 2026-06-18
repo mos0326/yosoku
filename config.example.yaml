@@ -13,7 +13,9 @@ tdnet:
   watchlist: []               # 例: ["7203", "6758", "9984"](空なら全開示)
 
 news:
-  enabled: true
+  # 既定オフ。ニュースは特定1銘柄のシグナルになりにくく、件数だけ多く
+  # コストを消費しがち。使うなら true にしてフィードを設定する。
+  enabled: false
   feeds:
     - https://www.nhk.or.jp/rss/news/cat5.xml   # NHK 経済
     # - https://example.com/your-feed.xml

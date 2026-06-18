@@ -13,6 +13,7 @@ HTTP 取得(`fetch`)と JSON → RawEvent 変換(`parse_items`)を分離して�
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 
 import requests
@@ -90,12 +91,14 @@ class TdnetSource(Source):
         self,
         limit: int = 50,
         watchlist: list[str] | None = None,
-        timeout: float = 15.0,
+        timeout: float = 30.0,
+        retries: int = 3,
         session: requests.Session | None = None,
     ) -> None:
         self.limit = limit
         self.watchlist = [str(c).strip() for c in (watchlist or [])]
         self.timeout = timeout
+        self.retries = max(1, retries)
         self.session = session or requests.Session()
 
     def fetch(self) -> list[RawEvent]:
@@ -103,30 +106,31 @@ class TdnetSource(Source):
             return self._fetch_watchlist()
         return self._fetch_recent()
 
+    def _get(self, url: str, params: dict) -> dict | None:
+        """JSON を取得。タイムアウト等は数回リトライ(指数バックオフ)。"""
+        last: Exception | None = None
+        for attempt in range(self.retries):
+            try:
+                resp = self.session.get(url, params=params, timeout=self.timeout)
+                resp.raise_for_status()
+                return resp.json()
+            except (requests.RequestException, ValueError) as e:
+                last = e
+                if attempt < self.retries - 1:
+                    time.sleep(1.5 * (attempt + 1))
+        logger.warning("TDnet 取得に失敗(%s): %s", url, last)
+        return None
+
     def _fetch_recent(self) -> list[RawEvent]:
-        try:
-            resp = self.session.get(
-                RECENT_URL, params={"limit": self.limit}, timeout=self.timeout
-            )
-            resp.raise_for_status()
-            return parse_items(resp.json())
-        except (requests.RequestException, ValueError) as e:
-            logger.warning("TDnet recent の取得に失敗: %s", e)
-            return []
+        data = self._get(RECENT_URL, {"limit": self.limit})
+        return parse_items(data) if data else []
 
     def _fetch_watchlist(self) -> list[RawEvent]:
         events: list[RawEvent] = []
         for code in self.watchlist:
-            try:
-                resp = self.session.get(
-                    CODE_URL.format(code=code),
-                    params={"limit": self.limit},
-                    timeout=self.timeout,
-                )
-                resp.raise_for_status()
-                events.extend(parse_items(resp.json()))
-            except (requests.RequestException, ValueError) as e:
-                logger.warning("TDnet(%s) の取得に失敗: %s", code, e)
+            data = self._get(CODE_URL.format(code=code), {"limit": self.limit})
+            if data:
+                events.extend(parse_items(data))
         return events
 
     def fetch_range(self, start: str, end: str, limit: int = 1000) -> list[RawEvent]:
@@ -134,15 +138,5 @@ class TdnetSource(Source):
 
         start/end は "YYYYMMDD"。Yanoshin の "YYYYMMDD-YYYYMMDD" 形式を使う。
         """
-        rng = f"{start}-{end}"
-        try:
-            resp = self.session.get(
-                RANGE_URL.format(range=rng),
-                params={"limit": limit},
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
-            return parse_items(resp.json())
-        except (requests.RequestException, ValueError) as e:
-            logger.warning("TDnet 範囲取得(%s)に失敗: %s", rng, e)
-            return []
+        data = self._get(RANGE_URL.format(range=f"{start}-{end}"), {"limit": limit})
+        return parse_items(data) if data else []

@@ -186,6 +186,34 @@ def test_run_once_analysis_failure_retries():
     assert store.is_seen("tdnet:103") is False
 
 
+class FakeTextNotifier(FakeNotifier):
+    def __init__(self, succeed=True):
+        super().__init__(succeed)
+        self.texts = []
+
+    def notify_text(self, content: str) -> bool:
+        self.texts.append(content)
+        return self.succeed
+
+
+def test_startup_ping_sent_once():
+    ev = _event(eid="tdnet:200")
+    store = Store(":memory:")
+    notifier = FakeTextNotifier()
+    pipe = Pipeline(
+        config=Config(),
+        sources=[FakeSource([ev])],
+        analyzer=FakeAnalyzer({"tdnet:200": _outcome(score=10)}),
+        store=store,
+        notifier=notifier,
+        usage=UsageTracker(),
+    )
+    asyncio.run(pipe.run_once())
+    assert len(notifier.texts) == 1  # 初回に稼働通知が1回
+    asyncio.run(pipe.run_once())
+    assert len(notifier.texts) == 1  # 二度目は送らない
+
+
 def test_run_once_concurrent_many():
     # 多数イベントでも並列に処理され、bullish のみ通知される
     events = [_event(eid=f"tdnet:{i}", title="決算短信") for i in range(20)]

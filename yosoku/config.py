@@ -54,7 +54,9 @@ class TdnetConfig:
 
 @dataclass
 class NewsConfig:
-    enabled: bool = True
+    # 既定はオフ。ニュースは特定1銘柄のシグナルになりにくく、件数だけ多く
+    # コストを消費しがちなため。必要なら config で enabled: true にする。
+    enabled: bool = False
     feeds: list[str] = field(default_factory=lambda: list(DEFAULT_NEWS_FEEDS))
 
 

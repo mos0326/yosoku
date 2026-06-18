@@ -45,6 +45,16 @@ def _signal():
     return Signal(event=event, analysis=analysis, stage="deep")
 
 
+def test_meta_flags():
+    store = Store(":memory:")
+    assert store.get_meta("startup_notified") is None
+    store.set_meta("startup_notified", "1")
+    assert store.get_meta("startup_notified") == "1"
+    store.set_meta("startup_notified", "2")  # 上書き
+    assert store.get_meta("startup_notified") == "2"
+    store.close()
+
+
 def test_record_and_list_signals():
     store = Store(":memory:")
     store.record_signal(_signal(), notified=True)
