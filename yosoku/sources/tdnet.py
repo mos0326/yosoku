@@ -29,6 +29,16 @@ CODE_URL = "https://webapi.yanoshin.jp/webapi/tdnet/list/{code}.json"
 # 日付範囲(バックテスト用)。{range} は "YYYYMMDD-YYYYMMDD" 等。
 RANGE_URL = "https://webapi.yanoshin.jp/webapi/tdnet/list/{range}.json"
 
+# 一部のAPIは既定の python-requests UA やクラウドIPからのアクセスを絞り、
+# 応答を返さず Read timeout になることがある。ブラウザ風 UA を付けて回避を試みる。
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 yosoku/0.1"
+    ),
+    "Accept": "application/json, text/plain, */*",
+}
+
 
 def _parse_pubdate(raw: str | None) -> datetime | None:
     if not raw:
@@ -100,6 +110,7 @@ class TdnetSource(Source):
         self.timeout = timeout
         self.retries = max(1, retries)
         self.session = session or requests.Session()
+        self.session.headers.update(_HEADERS)
 
     def fetch(self) -> list[RawEvent]:
         if self.watchlist:

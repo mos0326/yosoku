@@ -88,6 +88,7 @@ class DiscordNotifier:
                 self.webhook_url, json={"content": content}, timeout=self.timeout
             )
             resp.raise_for_status()
+            logger.info("Discord 送信OK (status=%s)", resp.status_code)
             return True
         except requests.RequestException as e:
             logger.error("Discord 送信に失敗: %s", e)

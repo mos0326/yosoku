@@ -130,18 +130,21 @@ class Pipeline:
     async def run_once(self) -> RunResult:
         result = RunResult()
 
-        # 0) 初回のみ Discord 接続確認の稼働通知を1回だけ送る。
+        # 0) 初回のみ Discord 接続確認の稼働通知を1回だけ送る(成否をログに明示)。
         if (
             not self.dry_run
             and self.notifier is not None
-            and self.store.get_meta("startup_notified") is None
+            and self.store.get_meta("startup_notified_v2") is None
         ):
             send = getattr(self.notifier, "notify_text", None)
-            if send and send(
-                "✅ yosoku センサー稼働開始。これは Discord 接続の確認メッセージです。"
-                "以後は『上がりそう』な銘柄を検知したときだけ通知します。"
-            ):
-                self.store.set_meta("startup_notified", "1")
+            if send:
+                ok = send(
+                    "✅ yosoku センサー稼働確認。これは Discord 接続テストです。"
+                    "以後は『上がりそう』な銘柄を検知したときだけ通知します。"
+                )
+                logger.info("Discord 稼働確認メッセージ: %s", "送信成功" if ok else "送信失敗")
+                if ok:
+                    self.store.set_meta("startup_notified_v2", "1")
 
         # 1) 収集(並列)
         events = dedup_events(await self._collect())
