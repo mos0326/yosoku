@@ -14,14 +14,17 @@ dependencies = [
     "feedparser>=6.0",
     "pydantic>=2.5",
     "PyYAML>=6.0",
-    "yfinance>=0.2.40",
     "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]
+# yfinance(pandas/numpy 等を含む重い依存)は任意。値動きコンテキスト/バックテスト
+# でのみ使用。速報・通知の中核機能はこれ無しで動く。
+prices = ["yfinance>=0.2.40"]
 dev = [
     "pytest>=7.4",
     "ruff>=0.4",
+    "yfinance>=0.2.40",
 ]
 
 [project.scripts]
