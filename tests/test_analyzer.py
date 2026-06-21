@@ -114,6 +114,36 @@ def test_single_stage_only_deep():
     assert [c["model"] for c in client.messages.calls] == ["claude-opus-4-8"]
 
 
+def test_fast_alert_skips_deep():
+    # 明確な好材料(高スコア)は一次判定で即通知し、精査(deep)を呼ばない
+    cfg = _config()  # fast_alert は既定 True
+    client = FakeAsyncClient({"claude-haiku-4-5": _analysis(score=90, conf=80)})
+    analyzer = TieredAnalyzer(cfg, client=client, usage=UsageTracker())
+    event = RawEvent(
+        source="tdnet", event_id="tdnet:fast", title="業績予想の上方修正", company_code="72030"
+    )
+    outcome = _run(analyzer.analyze(event))
+    assert outcome.stage == "triage"
+    assert outcome.analysis.score == 90
+    # deep(opus)は呼ばれない
+    assert [c["model"] for c in client.messages.calls] == ["claude-haiku-4-5"]
+
+
+def test_fast_alert_disabled_goes_deep():
+    cfg = _config()
+    cfg.analysis.fast_alert = False
+    client = FakeAsyncClient(
+        {"claude-haiku-4-5": _analysis(score=90, conf=80), "claude-opus-4-8": _analysis(score=75)}
+    )
+    analyzer = TieredAnalyzer(cfg, client=client, usage=UsageTracker())
+    event = RawEvent(
+        source="tdnet", event_id="tdnet:slow", title="業績予想の上方修正", company_code="72030"
+    )
+    outcome = _run(analyzer.analyze(event))
+    assert outcome.stage == "deep"
+    assert "claude-opus-4-8" in [c["model"] for c in client.messages.calls]
+
+
 def test_usage_is_tracked():
     cfg = _config()
     usage = UsageTracker()

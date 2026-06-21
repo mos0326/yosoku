@@ -78,6 +78,8 @@ class AnalysisConfig:
     # トリアージで is_relevant かつ score がこの値以上なら精査へ昇格。
     triage_escalate_score: int = 30
     deep_thinking: bool = True  # 精査で adaptive thinking を使う
+    # 速報優先: 明確な好材料は重い精査を待たず一次判定(高速)で即通知する。
+    fast_alert: bool = True
 
     # --- 一次キーワードフィルタ ---
     relevance_keywords: list[str] = field(
@@ -98,7 +100,7 @@ class Config:
     model: str = DEFAULT_MODEL  # 精査(deep)モデル
     discord_webhook_url: str | None = None
     store_path: str = "yosoku_state.db"
-    poll_interval: int = 300
+    poll_interval: int = 60  # watch の監視間隔(秒)。最速通知のため短め。
     tdnet: TdnetConfig = field(default_factory=TdnetConfig)
     news: NewsConfig = field(default_factory=NewsConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
@@ -159,6 +161,7 @@ def load_config(path: str | None = None) -> Config:
             a.get("triage_escalate_score"), ac.triage_escalate_score
         )
         ac.deep_thinking = bool(a.get("deep_thinking", ac.deep_thinking))
+        ac.fast_alert = bool(a.get("fast_alert", ac.fast_alert))
         ac.concurrency = _as_int(a.get("concurrency"), ac.concurrency)
         ac.max_retries = _as_int(a.get("max_retries"), ac.max_retries)
         ac.request_timeout = float(a.get("request_timeout", ac.request_timeout))

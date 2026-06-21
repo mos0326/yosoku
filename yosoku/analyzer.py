@@ -98,6 +98,13 @@ class TieredAnalyzer:
         triage = await self._call(event, model=a.triage_model, deep=False)
         if triage is None:
             return None
+
+        # 速報優先: 一次判定の時点で通知条件を満たす明確な好材料は、
+        # 重い精査(deep)を待たずに即通知する(数秒で届ける)。pipeline.should_notify
+        # と同じ条件をここで先取りする。
+        if a.fast_alert and self._triage_alertable(triage):
+            return AnalysisOutcome(triage, "triage")
+
         escalate = triage.is_relevant and triage.score >= a.triage_escalate_score
         if not escalate:
             return AnalysisOutcome(triage, "triage")
@@ -109,6 +116,17 @@ class TieredAnalyzer:
             # 精査に失敗したら triage 結果にフォールバック(取りこぼし防止)。
             return AnalysisOutcome(triage, "triage")
         return AnalysisOutcome(deep, "deep")
+
+    def _triage_alertable(self, triage: Analysis) -> bool:
+        """一次判定がそのまま通知条件を満たすか(pipeline.should_notify と同条件)。"""
+        a = self.config.analysis
+        return (
+            triage.is_relevant
+            and triage.direction == "bullish"
+            and triage.score >= a.score_threshold
+            and triage.confidence >= a.confidence_threshold
+            and (triage.ticker is not None or a.notify_tickerless)
+        )
 
     # ---- 内部 -----------------------------------------------------------
 
