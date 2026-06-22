@@ -1,31 +1,35 @@
-# yosoku を GitHub Actions 上で定期実行するワークフロー。
+# yosoku を GitHub Actions 上で「ほぼ常時」動かすワークフロー。
 #
-# 使い方(ブラウザだけで完結):
-#  1) リポジトリの Settings → Secrets and variables → Actions で
-#     ANTHROPIC_API_KEY と DISCORD_WEBHOOK_URL を登録する。
-#     (任意) コストを下げたいなら YOSOKU_MODEL=claude-sonnet-4-6 等も登録。
-#  2) このワークフローはデフォルトブランチ(main)に入っていると自動実行される。
-#  3) 状態DB(重複管理)は actions/cache で実行間に引き継ぎ、再通知を防ぐ。
+# 仕組み(GitHubで最速にする工夫):
+#  - 1回のジョブで watch を最大5.5時間まわし、60秒ごとに監視する。
+#  - 5.5時間でクリーンに終了 → 状態(重複DB)をキャッシュ保存。
+#  - schedule が次のジョブを積む(concurrency で実行中はキュー)。これで
+#    5.5時間ジョブが連鎖し、ほぼ切れ目なく60秒間隔の監視になる。
+#  - 公開リポジトリなので GitHub Actions の実行時間は無制限(無料)。
 #
-# 注意: 常駐(watch)ではなく run(1回)を定期実行する構成。真の常駐が必要なら
-#       VPS/コンテナで `python -m yosoku watch` を動かす方が確実。
+# 使い方(ブラウザだけ):
+#  1) Settings → Secrets and variables → Actions に
+#     ANTHROPIC_API_KEY と DISCORD_WEBHOOK_URL を登録(任意で YOSOKU_MODEL)。
+#  2) Actions タブ →「yosoku-sensor」→「Run workflow」で最初の長時間ジョブを起動。
+#  3) 状態DBは actions/cache で引き継ぎ、再通知を防ぐ。
 
 name: yosoku-sensor
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # 15分ごと(GitHubの仕様で多少遅延する)
-  workflow_dispatch: {}        # Actions タブから手動実行も可
+    - cron: "*/15 * * * *"   # 15分ごとに次ジョブを積む(実行中はキューされ連鎖)
+  workflow_dispatch: {}        # 手動で最初の長時間ジョブを起動
 
-# 同時実行を抑止(キャッシュ競合・二重通知の回避)
+# 実行中は新しいトリガをキューに積む(キャンセルしない)。
+# → 長時間ジョブが終わると次が即開始し、ほぼ常時稼働になる。
 concurrency:
-  group: yosoku-sensor
+  group: yosoku-watch
   cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 350   # GitHub の上限6時間より短く
     steps:
       - uses: actions/checkout@v4
 
@@ -36,9 +40,8 @@ jobs:
       - name: Install
         run: pip install -e .
 
-      # 状態DB(重複管理)を実行間で引き継ぐ。
-      # 毎回ユニークなキーで保存し、restore-keys の前方一致で直近を復元する
-      # ローリング方式。これで「前回までに通知済み」を覚えていられる。
+      # 状態DB(重複管理)を引き継ぐローリングキャッシュ。
+      # watch がクリーン終了すると post ステップで保存される。
       - name: Cache state
         uses: actions/cache@v4
         with:
@@ -47,10 +50,10 @@ jobs:
           restore-keys: |
             yosoku-state-
 
-      - name: Run sensor
+      # 60秒間隔で監視し、5.5時間(19800秒)でクリーン終了 → 次ジョブへ連鎖。
+      - name: Watch (long-running)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # 未登録なら空のまま無視され、既定(claude-opus-4-8)になる。
           YOSOKU_MODEL: ${{ secrets.YOSOKU_MODEL }}
-        run: python -m yosoku run
+        run: python -m yosoku watch --interval 60 --max-runtime 19800

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -213,14 +214,31 @@ class Pipeline:
         )
         return result
 
-    async def watch(self, interval: int | None = None) -> None:
+    async def watch(
+        self, interval: int | None = None, max_runtime: int | None = None
+    ) -> None:
+        """interval 秒ごとに run_once を繰り返す。
+
+        max_runtime(秒)を指定すると、その時間に達したらクリーンに終了する
+        (GitHub Actions の長時間ジョブを連鎖させる用途。終了時に状態保存が走る)。
+        """
         interval = interval or self.config.poll_interval
-        logger.info("watch モード開始 (interval=%ds)", interval)
+        deadline = (
+            time.monotonic() + max_runtime if max_runtime is not None else None
+        )
+        logger.info(
+            "watch モード開始 (interval=%ds, max_runtime=%s)",
+            interval,
+            f"{max_runtime}s" if max_runtime else "無制限",
+        )
         while True:
             try:
                 await self.run_once()
             except Exception:
                 logger.exception("run_once で例外。次サイクルへ継続。")
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.info("max_runtime 到達。クリーン終了する。")
+                return
             await asyncio.sleep(interval)
 
     async def aclose(self) -> None:

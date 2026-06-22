@@ -72,11 +72,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _watch(cfg: Config, dry_run: bool, interval) -> None:
+async def _watch(cfg: Config, dry_run: bool, interval, max_runtime) -> None:
     with open_store(cfg.store_path) as store:
         pipeline = build_pipeline(cfg, store, dry_run=dry_run)
         try:
-            await pipeline.watch(interval=interval)
+            await pipeline.watch(interval=interval, max_runtime=max_runtime)
         finally:
             await pipeline.aclose()
 
@@ -87,7 +87,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     if missing:
         return _print_missing(missing)
     try:
-        asyncio.run(_watch(cfg, args.dry_run, args.interval))
+        asyncio.run(_watch(cfg, args.dry_run, args.interval, args.max_runtime))
     except KeyboardInterrupt:
         print("\n停止しました。")
     return 0
@@ -161,6 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch = sub.add_parser("watch", help="常駐してポーリング")
     p_watch.add_argument("--dry-run", action="store_true", help="通知せず表示のみ")
     p_watch.add_argument("--interval", type=int, help="ポーリング間隔(秒)")
+    p_watch.add_argument(
+        "--max-runtime",
+        type=int,
+        default=None,
+        help="この秒数で綺麗に終了(GitHub Actionsの長時間ジョブ連鎖用)",
+    )
     p_watch.set_defaults(func=cmd_watch)
 
     p_src = sub.add_parser("sources", help="収集のみ(疎通確認)")

@@ -214,6 +214,15 @@ def test_startup_ping_sent_once():
     assert len(notifier.texts) == 1  # 二度目は送らない
 
 
+def test_watch_max_runtime_terminates():
+    # max_runtime=0 なら1サイクル実行してクリーン終了する(無限ループしない)
+    ev = _event(eid="tdnet:watch")
+    pipe, store, analyzer, notifier = _pipeline([ev], {"tdnet:watch": _outcome(score=90)})
+    # 戻ってくれば(ハングしなければ)成功
+    asyncio.run(pipe.watch(interval=0, max_runtime=0))
+    assert "tdnet:watch" in analyzer.calls
+
+
 def test_run_once_concurrent_many():
     # 多数イベントでも並列に処理され、bullish のみ通知される
     events = [_event(eid=f"tdnet:{i}", title="決算短信") for i in range(20)]
