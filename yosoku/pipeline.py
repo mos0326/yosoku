@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from yosoku.analyzer import AnalysisOutcome, TieredAnalyzer
+from yosoku.clock import is_active_now
 from yosoku.config import Config
 from yosoku.metrics import UsageTracker
 from yosoku.models import Analysis, RawEvent, Signal
@@ -232,10 +233,13 @@ class Pipeline:
             f"{max_runtime}s" if max_runtime else "無制限",
         )
         while True:
-            try:
-                await self.run_once()
-            except Exception:
-                logger.exception("run_once で例外。次サイクルへ継続。")
+            if is_active_now(self.config.active_window, self.config.weekdays_only):
+                try:
+                    await self.run_once()
+                except Exception:
+                    logger.exception("run_once で例外。次サイクルへ継続。")
+            else:
+                logger.debug("稼働時間外のためスキップ。")
             if deadline is not None and time.monotonic() >= deadline:
                 logger.info("max_runtime 到達。クリーン終了する。")
                 return

@@ -101,6 +101,10 @@ class Config:
     discord_webhook_url: str | None = None
     store_path: str = "yosoku_state.db"
     poll_interval: int = 60  # watch の監視間隔(秒)。最速通知のため短め。
+    # 稼働時間帯(JST, 例 "08:00-23:30")。None なら常時。引け後の開示が多いので
+    # 9-15 に絞らず広めを推奨(15:00以降に決算/上方修正/自社株買いが集中する)。
+    active_window: str | None = None
+    weekdays_only: bool = True  # 土日は休む(開示が出ない)
     tdnet: TdnetConfig = field(default_factory=TdnetConfig)
     news: NewsConfig = field(default_factory=NewsConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
@@ -124,6 +128,8 @@ def load_config(path: str | None = None) -> Config:
     cfg.model = data.get("model", cfg.model)
     cfg.store_path = data.get("store_path", cfg.store_path)
     cfg.poll_interval = _as_int(data.get("poll_interval"), cfg.poll_interval)
+    cfg.active_window = data.get("active_window", cfg.active_window)
+    cfg.weekdays_only = bool(data.get("weekdays_only", cfg.weekdays_only))
 
     if data.get("tdnet"):
         t = data["tdnet"]

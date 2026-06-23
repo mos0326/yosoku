@@ -18,6 +18,7 @@ from datetime import datetime
 
 import requests
 
+from yosoku.clock import JST
 from yosoku.models import RawEvent
 from yosoku.sources.base import Source
 
@@ -41,11 +42,12 @@ _HEADERS = {
 
 
 def _parse_pubdate(raw: str | None) -> datetime | None:
+    """TDnet の時刻(JST)を JST-aware な datetime にする。"""
     if not raw:
         return None
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(raw.strip(), fmt)
+            return datetime.strptime(raw.strip(), fmt).replace(tzinfo=JST)
         except ValueError:
             continue
     return None

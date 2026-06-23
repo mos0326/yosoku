@@ -93,6 +93,25 @@ def cmd_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _agents(cfg: Config, dry_run: bool) -> None:
+    from yosoku.agents.orchestrator import run_agents
+
+    with open_store(cfg.store_path) as store:
+        await run_agents(cfg, store, dry_run=dry_run)
+
+
+def cmd_agents(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    missing = _missing_secrets(cfg, require_notify=not args.dry_run)
+    if missing:
+        return _print_missing(missing)
+    try:
+        asyncio.run(_agents(cfg, args.dry_run))
+    except KeyboardInterrupt:
+        print("\n停止しました。")
+    return 0
+
+
 # ---- sources / history / backtest ----------------------------------------
 
 
@@ -168,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="この秒数で綺麗に終了(GitHub Actionsの長時間ジョブ連鎖用)",
     )
     p_watch.set_defaults(func=cmd_watch)
+
+    p_agents = sub.add_parser("agents", help="マルチエージェント版で常駐(実験的)")
+    p_agents.add_argument("--dry-run", action="store_true", help="通知せず表示のみ")
+    p_agents.set_defaults(func=cmd_agents)
 
     p_src = sub.add_parser("sources", help="収集のみ(疎通確認)")
     p_src.add_argument("--limit", type=int, default=10, help="表示件数")
