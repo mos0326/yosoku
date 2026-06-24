@@ -1,4 +1,45 @@
-from yosoku.sources.prices import to_yahoo_ticker
+from yosoku.sources.prices import current_price, to_yahoo_ticker
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
+
+class _FakeSession:
+    def __init__(self, payload):
+        self._p = payload
+
+    def get(self, url, **kwargs):
+        return _FakeResp(self._p)
+
+
+def test_current_price_parse():
+    payload = {
+        "chart": {
+            "result": [
+                {"meta": {"regularMarketPrice": 170.0, "chartPreviousClose": 165.0, "currency": "JPY"}}
+            ]
+        }
+    }
+    pi = current_price("4169.T", session=_FakeSession(payload))
+    assert pi is not None
+    assert pi["price"] == 170.0
+    assert pi["currency"] == "JPY"
+    assert abs(pi["change_pct"] - (5.0 / 165.0 * 100.0)) < 1e-6
+
+
+def test_current_price_bad_returns_none():
+    assert current_price("") is None
+    assert current_price("X.T", session=_FakeSession({"chart": {"result": []}})) is None
+    assert current_price("X.T", session=_FakeSession({"chart": {"result": [{"meta": {}}]}})) is None
+
 
 
 def test_5digit_numeric_with_trailing_zero():

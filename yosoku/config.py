@@ -92,6 +92,10 @@ class AnalysisConfig:
     request_timeout: float = 60.0  # 1 リクエストのタイムアウト(秒)
 
     notify_tickerless: bool = False  # 銘柄不明のニュースでも通知するか
+    # 東京プロマーケットのみ上場(一般売買しにくい)の銘柄は通知しない。
+    exclude_pro_market: bool = True
+    # 通知時に現在値を取得して載せるか。
+    fetch_price_on_alert: bool = True
 
 
 @dataclass
@@ -172,6 +176,10 @@ def load_config(path: str | None = None) -> Config:
         ac.max_retries = _as_int(a.get("max_retries"), ac.max_retries)
         ac.request_timeout = float(a.get("request_timeout", ac.request_timeout))
         ac.notify_tickerless = bool(a.get("notify_tickerless", ac.notify_tickerless))
+        ac.exclude_pro_market = bool(a.get("exclude_pro_market", ac.exclude_pro_market))
+        ac.fetch_price_on_alert = bool(
+            a.get("fetch_price_on_alert", ac.fetch_price_on_alert)
+        )
         if a.get("relevance_keywords") is not None:
             ac.relevance_keywords = list(a["relevance_keywords"])
         cfg.analysis = ac

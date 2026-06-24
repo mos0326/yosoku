@@ -1,7 +1,6 @@
-"""株価コンテキスト取得(yfinance).
+"""株価コンテキスト取得.
 
-証券コード → Yahoo Finance ティッカー変換と、直近の値動きを短いテキストに
-要約する処理を提供する。分析プロンプトに「直近の地合い」を添えるのが目的で、
+証券コード → Yahoo Finance ティッカー変換、現在値の軽量取得、直近の値動き要約。
 取得失敗は致命的でない(None を返してスキップ)。
 """
 
@@ -9,7 +8,55 @@ from __future__ import annotations
 
 import logging
 
+import requests
+
 logger = logging.getLogger(__name__)
+
+# Yahoo の軽量 chart API。yfinance(pandas/numpy)不要で速い。
+_QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+_UA = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
+}
+
+
+def current_price(
+    ticker: str, timeout: float = 8.0, session: requests.Session | None = None
+) -> dict | None:
+    """現在値(最新)を軽量取得する。失敗時 None。
+
+    返り値: {"price": float, "prev_close": float|None, "change_pct": float|None,
+             "currency": str}
+    """
+    if not ticker:
+        return None
+    sess = session or requests
+    try:
+        resp = sess.get(
+            _QUOTE_URL.format(ticker=ticker),
+            params={"interval": "1m", "range": "1d"},
+            headers=_UA,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        meta = resp.json()["chart"]["result"][0]["meta"]
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+        logger.info("現在値の取得に失敗(%s): %s", ticker, e)
+        return None
+
+    price = meta.get("regularMarketPrice")
+    if price is None:
+        return None
+    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+    change_pct = ((price - prev) / prev * 100.0) if prev else None
+    return {
+        "price": float(price),
+        "prev_close": float(prev) if prev else None,
+        "change_pct": change_pct,
+        "currency": meta.get("currency") or "JPY",
+    }
 
 
 def to_yahoo_ticker(company_code: str) -> str | None:

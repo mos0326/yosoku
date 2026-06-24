@@ -112,6 +112,36 @@ def test_should_notify_tickerless():
     assert should_notify(_outcome(ticker=None).analysis, cfg) is True
 
 
+def test_prefilter_excludes_pro_market():
+    from yosoku.pipeline import is_pro_market
+
+    cfg = Config()
+    pro = _event(title="決算短信")
+    pro.extra["markets_string"] = "東京プロマーケット"
+    general = _event(title="決算短信")
+    general.extra["markets_string"] = "東証グロース"
+
+    assert is_pro_market(pro) is True
+    assert is_pro_market(general) is False
+    assert passes_prefilter(pro, cfg) is False       # プロマーケットは弾く
+    assert passes_prefilter(general, cfg) is True     # 一般市場は通す
+    cfg.analysis.exclude_pro_market = False
+    assert passes_prefilter(pro, cfg) is True         # 除外オフなら通す
+
+
+def test_embed_shows_price():
+    from yosoku.notifier import build_embed
+
+    ev = _event()
+    ev.extra["price_at_alert"] = {
+        "price": 170.0, "prev_close": 165.0, "change_pct": 3.03, "currency": "JPY"
+    }
+    sig = Signal(event=ev, analysis=_outcome(score=80).analysis, stage="deep")
+    emb = build_embed(sig)
+    assert "¥170" in emb["title"]
+    assert any(f["name"].startswith("株価") for f in emb["fields"])
+
+
 def test_dedup_events():
     evs = [_event(eid="a"), _event(eid="b"), _event(eid="a")]
     out = dedup_events(evs)
@@ -123,6 +153,7 @@ def test_dedup_events():
 
 def _pipeline(events, mapping, cfg=None, notifier=None):
     cfg = cfg or Config()
+    cfg.analysis.fetch_price_on_alert = False  # テストでは実ネットワークを叩かない
     store = Store(":memory:")
     analyzer = FakeAnalyzer(mapping)
     notifier = notifier if notifier is not None else FakeNotifier()

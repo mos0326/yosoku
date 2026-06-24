@@ -23,6 +23,7 @@ from yosoku.models import Analysis, RawEvent, Signal
 from yosoku.notifier import DiscordNotifier
 from yosoku.sources.base import Source
 from yosoku.sources.news_rss import NewsRssSource
+from yosoku.sources.prices import current_price
 from yosoku.sources.tdnet import TdnetSource
 from yosoku.store import Store
 
@@ -32,10 +33,18 @@ logger = logging.getLogger(__name__)
 # ---- 中核の純関数(テスト対象) -------------------------------------------
 
 
+def is_pro_market(event: RawEvent) -> bool:
+    """東京プロマーケット銘柄か(markets_string で判定)。"""
+    m = str(event.extra.get("markets_string") or "")
+    return ("プロ" in m) or ("PRO" in m.upper())
+
+
 def passes_prefilter(event: RawEvent, config: Config) -> bool:
     """LLM 分析に回す前の一次フィルタ。"""
     if event.source != "tdnet":
         return True
+    if config.analysis.exclude_pro_market and is_pro_market(event):
+        return False  # プロマーケットのみ上場は対象外
     keywords = config.analysis.relevance_keywords
     if not keywords:
         return True
@@ -183,6 +192,12 @@ class Pipeline:
             notified = False
             if should_notify(outcome.analysis, self.config):
                 result.signals.append(signal)
+                # 通知直前に現在値を取得して載せる(銘柄名の横に株価を出す)。
+                ticker = signal.display_ticker
+                if ticker and self.config.analysis.fetch_price_on_alert:
+                    pi = await asyncio.to_thread(current_price, ticker)
+                    if pi:
+                        signal.event.extra["price_at_alert"] = pi
                 if self.dry_run or self.notifier is None:
                     logger.info(
                         "[DRY-RUN] シグナル(%s): %s %s score=%+d conf=%d",

@@ -22,11 +22,25 @@ _COLORS = {
 }
 
 
+def _format_price(signal: Signal) -> str:
+    """通知時点の株価を '¥170 (+3.0%)' のような文字列にする。無ければ空。"""
+    pi = signal.event.extra.get("price_at_alert")
+    if not pi or pi.get("price") is None:
+        return ""
+    cur = "¥" if pi.get("currency") == "JPY" else f"{pi.get('currency', '')} "
+    s = f"{cur}{pi['price']:,.0f}"
+    if pi.get("change_pct") is not None:
+        s += f" ({pi['change_pct']:+.1f}%)"
+    return s
+
+
 def build_embed(signal: Signal) -> dict:
     a = signal.analysis
     ticker = signal.display_ticker or "—"
     name = signal.display_name or ""
-    title = f"📈 {name} {ticker}".strip()
+    price = _format_price(signal)
+    title = f"📈 {name} {ticker}" + (f"  {price}" if price else "")
+    title = title.strip()
 
     fields = [
         {"name": "方向", "value": a.direction, "inline": True},
@@ -36,6 +50,9 @@ def build_embed(signal: Signal) -> dict:
         {"name": "見出し", "value": signal.event.title[:1000], "inline": False},
         {"name": "理由", "value": a.rationale[:1000], "inline": False},
     ]
+    if price:
+        # 株価を分かりやすく専用欄でも出す(通知時点の値)。
+        fields.insert(0, {"name": "株価(通知時点)", "value": price, "inline": True})
     if a.key_factors:
         fields.append(
             {
