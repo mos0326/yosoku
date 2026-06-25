@@ -29,15 +29,19 @@ sources/* → 一次フィルタ → 重複排除(store) → 分析(analyzer) �
 - `yosoku/sources/`  : データ取得。`Source` を実装し `fetch()`→`list[RawEvent]`。
   - `tdnet.py`  : TDnet 適時開示(Yanoshin WebAPI)。`parse_items` は純関数でテスト可。
   - `news_rss.py`: ニュース RSS(feedparser)。
-  - `prices.py` : 証券コード→ティッカー変換 + yfinance 値動き。
+  - `prices.py` : 証券コード→ティッカー変換 + 軽量現在値(`current_price`)+ yfinance 値動き。
+  - `pts.py`    : PTS(夜間/寄り前)価格を株探から best-effort 取得。`parse_pts` は純関数。
   - `document.py`: 開示PDF本文の抽出(pypdf)。
 - `yosoku/analyzer.py` : `TieredAnalyzer`。triage(安価) → deep(高性能+thinking) の二段階・非同期。
 - `yosoku/pipeline.py` : 非同期オーケストレーション。`should_notify`/`passes_prefilter` は純関数。
-- `yosoku/store.py`    : SQLite。`seen`(重複) と `signals`(履歴)。
-- `yosoku/notifier.py` : Discord Webhook。
+  通知成功時に `_freeze_alert` でエントリー価格を `alerts` に凍結(答え合わせの起点)。
+- `yosoku/store.py`    : SQLite。`seen`(重複)/`signals`(履歴)/`alerts`(エントリー凍結・不変)/`outcomes`(答え合わせ)。
+- `yosoku/scoring.py`  : 答え合わせ。実通知の後刻リターンを採点し精度集計。
+  `realized_return`/`is_anomalous`/`window_status`/`accuracy_report` は純関数。`price_fn` 差し替え可。
+- `yosoku/notifier.py` : Discord Webhook。買い時/優先度/想定上昇率/PTS も埋め込む。
 - `yosoku/metrics.py`  : トークン/コスト集計。
 - `yosoku/backtest.py` : 過去開示で判定品質を評価。`summarize`/`score_bucket` は純関数。
-- `yosoku/cli.py`      : `run` / `watch` / `sources` / `history` / `backtest`。
+- `yosoku/cli.py`      : `run` / `watch` / `sources` / `history` / `score` / `accuracy` / `backtest`。
 
 ## 設計上の約束
 

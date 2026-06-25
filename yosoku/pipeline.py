@@ -219,6 +219,9 @@ class Pipeline:
                     notified = self.notifier.notify(signal)
                 if notified:
                     result.notified += 1
+                    # 実通知のみ、答え合わせ用にエントリー価格を不変で凍結する。
+                    if not self.dry_run:
+                        self._freeze_alert(signal)
 
             self.store.record_signal(signal, notified=notified)
             self.store.mark_seen(event.event_id, event.source, notified=notified)
@@ -236,6 +239,32 @@ class Pipeline:
             result.cost,
         )
         return result
+
+    def _freeze_alert(self, signal: Signal) -> None:
+        """通知が飛んだ瞬間のエントリー価格を alerts に凍結する(答え合わせの起点)。
+
+        PTS 時間帯は実際に約定可能な PTS 価格をエントリーに採る。取得できていなければ
+        ザラ場の現在値。どちらも無ければ entry=None(後段で「エントリー欠損」として可視化)。
+        """
+        extra = signal.event.extra
+        pi = extra.get("price_at_alert") or {}
+        pts = extra.get("pts_price") or {}
+        if pts.get("price") is not None and is_pts_hours():
+            entry, venue, ccy = pts["price"], "pts", "JPY"
+        else:
+            entry, venue, ccy = pi.get("price"), "regular", pi.get("currency")
+        try:
+            self.store.freeze_alert(
+                event_id=signal.event.event_id,
+                ticker=signal.display_ticker,
+                entry_price=entry,
+                currency=ccy,
+                entry_venue=venue,
+                score=signal.analysis.score,
+                expected_move_pct=signal.analysis.expected_move_pct,
+            )
+        except Exception:  # 凍結失敗で通知フローを止めない
+            logger.exception("alert の凍結に失敗(%s)", signal.event.event_id)
 
     async def watch(
         self, interval: int | None = None, max_runtime: int | None = None

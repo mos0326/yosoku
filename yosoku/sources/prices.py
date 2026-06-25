@@ -56,6 +56,9 @@ def current_price(
         "prev_close": float(prev) if prev else None,
         "change_pct": change_pct,
         "currency": meta.get("currency") or "JPY",
+        # 評価値の as-of 時刻(epoch秒)。答え合わせで「いつの値か」を監査するのに使う。
+        # 市場が閉じていれば直近取引時刻(=前営業日終値の時刻)が返る。無ければ None。
+        "as_of": meta.get("regularMarketTime"),
     }
 
 

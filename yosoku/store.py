@@ -41,6 +41,30 @@ CREATE TABLE IF NOT EXISTS signals (
     raw          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(score);
+-- alerts: 実際に通知が飛んだ瞬間の「エントリー価格」を不変で凍結する。
+--   signals は再分析で INSERT OR REPLACE され created_at/値が変わりうるため、
+--   答え合わせ(outcome)の起点はこちらに固定する(INSERT OR IGNORE で初回のみ)。
+CREATE TABLE IF NOT EXISTS alerts (
+    event_id          TEXT PRIMARY KEY,
+    ticker            TEXT,
+    entry_price       REAL,
+    currency          TEXT,
+    entry_venue       TEXT,           -- 'regular' | 'pts'
+    score             INTEGER,
+    expected_move_pct INTEGER,
+    alerted_at        TEXT DEFAULT (datetime('now'))   -- UTC
+);
+-- outcomes: 後刻の価格と突き合わせた答え合わせ結果(event_id ごとに一度だけ)。
+CREATE TABLE IF NOT EXISTS outcomes (
+    event_id       TEXT PRIMARY KEY,
+    eval_price     REAL,
+    return_pct     REAL,            -- 実現リターン(小数, 例 0.08)。算出不能なら NULL。
+    status         TEXT,            -- 'scored'|'anomaly'|'window_missed'|'eval_unavailable'
+    target_hours   REAL,            -- 想定保有(min_age_hours)
+    realized_hours REAL,            -- 実経過(エントリー→評価)
+    eval_at        TEXT,            -- 評価値の as-of(ISO, 監査用)。無ければ NULL。
+    evaluated_at   TEXT DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -53,6 +77,8 @@ class Store:
         self.path = path
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
+        # watch と score を別プロセスで同時に走らせても落ちないよう待つ。
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -123,6 +149,89 @@ class Store:
             sql += " WHERE notified = 1"
         sql += " ORDER BY created_at DESC LIMIT ?"
         return list(self._conn.execute(sql, (limit,)).fetchall())
+
+    # ---- alerts(エントリー価格の凍結) / outcomes(答え合わせ) -----------
+
+    def freeze_alert(
+        self,
+        event_id: str,
+        ticker: str | None,
+        entry_price: float | None,
+        currency: str | None,
+        entry_venue: str | None,
+        score: int | None,
+        expected_move_pct: int | None,
+    ) -> None:
+        """通知が飛んだ瞬間のエントリーを不変で記録する(初回のみ・冪等)。"""
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO alerts
+              (event_id, ticker, entry_price, currency, entry_venue, score,
+               expected_move_pct)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (event_id, ticker, entry_price, currency, entry_venue, score,
+             expected_move_pct),
+        )
+        self._conn.commit()
+
+    def pending_alerts(self, limit: int = 500) -> list[sqlite3.Row]:
+        """まだ答え合わせしていない、エントリー価格付きの通知を古い順に返す。"""
+        return list(
+            self._conn.execute(
+                """
+                SELECT a.event_id, a.ticker, a.entry_price, a.currency,
+                       a.score, a.expected_move_pct, a.alerted_at
+                FROM alerts a
+                LEFT JOIN outcomes o ON o.event_id = a.event_id
+                WHERE o.event_id IS NULL
+                  AND a.entry_price IS NOT NULL
+                  AND a.ticker IS NOT NULL
+                ORDER BY a.alerted_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
+    def record_outcome(
+        self,
+        event_id: str,
+        eval_price: float | None,
+        return_pct: float | None,
+        status: str,
+        target_hours: float | None,
+        realized_hours: float | None,
+        eval_at: str | None,
+    ) -> None:
+        """答え合わせ結果を記録する(event_id ごとに一度だけ・冪等)。"""
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO outcomes
+              (event_id, eval_price, return_pct, status, target_hours,
+               realized_hours, eval_at)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (event_id, eval_price, return_pct, status, target_hours,
+             realized_hours, eval_at),
+        )
+        self._conn.commit()
+
+    def outcome_rows(self) -> list[sqlite3.Row]:
+        """精度集計用に alerts×outcomes を結合した全行を返す(未採点は outcome 側 NULL)。"""
+        return list(
+            self._conn.execute(
+                """
+                SELECT a.event_id, a.ticker, a.entry_price, a.currency,
+                       a.entry_venue, a.score, a.expected_move_pct,
+                       o.eval_price, o.return_pct, o.status,
+                       o.realized_hours, o.eval_at
+                FROM alerts a
+                LEFT JOIN outcomes o ON o.event_id = a.event_id
+                ORDER BY a.alerted_at DESC
+                """
+            ).fetchall()
+        )
 
     def close(self) -> None:
         self._conn.close()

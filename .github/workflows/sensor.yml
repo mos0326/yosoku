@@ -50,6 +50,12 @@ jobs:
           restore-keys: |
             yosoku-state-
 
+      # 答え合わせ: 採点窓に入った過去通知を後刻の株価で採点する(APIキー不要・株価のみ)。
+      # ジョブ起動ごと(約5.5hおき)に走り、結果は同じ状態DBに蓄積される。失敗しても続行。
+      - name: Score outcomes
+        continue-on-error: true
+        run: python -m yosoku score
+
       # 60秒間隔で監視し、5.5時間(19800秒)でクリーン終了 → 次ジョブへ連鎖。
       - name: Watch (long-running)
         env:

@@ -5,6 +5,8 @@
   python -m yosoku watch --interval 300      # 常駐ポーリング
   python -m yosoku sources                   # 収集のみ(疎通確認)
   python -m yosoku history --limit 20        # 過去シグナルの一覧
+  python -m yosoku score                     # 通知の答え合わせ(精度採点)
+  python -m yosoku accuracy                  # 蓄積済みの精度レポート
   python -m yosoku backtest 20260601 20260607 --horizon 5   # バックテスト
 """
 
@@ -144,6 +146,39 @@ def cmd_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_score(args: argparse.Namespace) -> int:
+    """通知の答え合わせ:採点窓に入った通知を評価し、精度レポートを表示する。"""
+    cfg = load_config(args.config)
+    from yosoku.scoring import accuracy_report, score_pending
+
+    with open_store(cfg.store_path) as store:
+        counts = score_pending(
+            store,
+            min_age_hours=args.min_age_hours,
+            max_age_hours=args.max_age_hours,
+        )
+        rep = accuracy_report(store.outcome_rows(), hit_threshold=args.hit_threshold)
+    print(
+        f"採点: scored={counts['scored']} anomaly={counts['anomaly']} "
+        f"window_missed={counts['window_missed']} "
+        f"eval_unavailable={counts['eval_unavailable']} "
+        f"too_early={counts['too_early']} no_price={counts['no_price']}"
+    )
+    print(rep.render())
+    return 0
+
+
+def cmd_accuracy(args: argparse.Namespace) -> int:
+    """蓄積済みの答え合わせ結果から精度レポートのみ表示する(取得なし)。"""
+    cfg = load_config(args.config)
+    from yosoku.scoring import accuracy_report
+
+    with open_store(cfg.store_path) as store:
+        rep = accuracy_report(store.outcome_rows(), hit_threshold=args.hit_threshold)
+    print(rep.render())
+    return 0
+
+
 def cmd_backtest(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     missing = _missing_secrets(cfg, require_notify=False)
@@ -200,6 +235,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_hist.add_argument("--limit", type=int, default=20, help="表示件数")
     p_hist.add_argument("--notified", action="store_true", help="通知済みのみ")
     p_hist.set_defaults(func=cmd_history)
+
+    p_score = sub.add_parser("score", help="通知の答え合わせ(後刻の株価で精度を採点)")
+    p_score.add_argument(
+        "--min-age-hours", type=float, default=20.0,
+        help="この時間ぶん経過(かつ市場が前進)してから採点する",
+    )
+    p_score.add_argument(
+        "--max-age-hours", type=float, default=168.0,
+        help="これを超えても未採点なら期限切れにする(既定7日)",
+    )
+    p_score.add_argument(
+        "--hit-threshold", type=float, default=0.005,
+        help="コスト控除後の『勝ち』しきい値(小数, 既定0.005=0.5%%)",
+    )
+    p_score.set_defaults(func=cmd_score)
+
+    p_acc = sub.add_parser("accuracy", help="蓄積済みの答え合わせ結果から精度を表示")
+    p_acc.add_argument(
+        "--hit-threshold", type=float, default=0.005,
+        help="コスト控除後の『勝ち』しきい値(小数, 既定0.005=0.5%%)",
+    )
+    p_acc.set_defaults(func=cmd_accuracy)
 
     p_bt = sub.add_parser("backtest", help="過去レンジで判定品質を評価")
     p_bt.add_argument("start", help="開始日 YYYYMMDD")
