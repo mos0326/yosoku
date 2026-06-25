@@ -219,8 +219,9 @@ class Pipeline:
                     notified = self.notifier.notify(signal)
                 if notified:
                     result.notified += 1
-                    # 実通知のみ、答え合わせ用にエントリー価格を不変で凍結する。
-                    if not self.dry_run:
+                    # 実送信した通知のみ、答え合わせ用にエントリー価格を不変で凍結する
+                    # (notifier=None の擬似通知を起点に混ぜない)。
+                    if not self.dry_run and self.notifier is not None:
                         self._freeze_alert(signal)
 
             self.store.record_signal(signal, notified=notified)

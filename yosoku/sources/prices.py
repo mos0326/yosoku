@@ -28,7 +28,8 @@ def current_price(
     """現在値(最新)を軽量取得する。失敗時 None。
 
     返り値: {"price": float, "prev_close": float|None, "change_pct": float|None,
-             "currency": str}
+             "currency": str, "as_of": int|None}
+    as_of は評価値の as-of(市場の最終約定 epoch秒)。答え合わせの採点時刻判定に使う。
     """
     if not ticker:
         return None

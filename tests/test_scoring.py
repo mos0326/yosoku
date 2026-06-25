@@ -209,6 +209,33 @@ def test_score_pending_market_not_advanced_skips():
     store.close()
 
 
+def test_score_pending_no_price_leaves_pending():
+    store = Store(":memory:")
+    _seed_alert(store)
+
+    def price_fn(ticker):
+        return None  # 取得失敗
+
+    now = datetime.now(UTC) + timedelta(hours=48)  # 窓内
+    counts = score_pending(store, min_age_hours=20, price_fn=price_fn, now=now)
+    assert counts["no_price"] == 1
+    # outcome は作らず pending のまま(窓内なら次回再試行)。
+    assert store.outcome_rows()[0]["status"] is None
+    assert len(store.pending_alerts()) == 1
+    store.close()
+
+
+def test_accuracy_report_scored_with_none_return_is_unavailable():
+    # status が scored でも return_pct が None なら eval_unavailable に振り替える。
+    rows = [
+        {"entry_price": 100, "status": "scored", "return_pct": None, "score": 60,
+         "expected_move_pct": None},
+    ]
+    rep = accuracy_report(rows)
+    assert rep.scored == 0
+    assert rep.eval_unavailable == 1
+
+
 def test_score_pending_anomaly_and_currency():
     store = Store(":memory:")
     store.freeze_alert(
