@@ -24,7 +24,7 @@ from yosoku.metrics import UsageTracker
 from yosoku.models import Analysis, RawEvent
 from yosoku.research import gather_web_context
 from yosoku.sources.document import fetch_document_text
-from yosoku.sources.prices import price_context, to_yahoo_ticker
+from yosoku.sources.prices import current_price, to_yahoo_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ TRIAGE_SYSTEM = """\
 押し上げる材料**になりうるかを手早く判定します。
 - 確実性より網羅性を優先し、少しでも上昇材料になりそうなら score を高めに。
 - 銘柄を特定できない一般ニュースは is_relevant=false。
+- action(今すぐ/押し目待ち/明日以降/見送り)・priority(1-5)・expected_move_pct も
+  ざっくり埋めてよい(後段で精査される)。
 - 後段で精査するので、ここでは素早く粗く判断してよい。"""
 
 DEEP_SYSTEM = """\
@@ -53,7 +55,14 @@ DEEP_SYSTEM = """\
 - 直近で既に大きく上昇している場合は出尽くし/材料織り込みの可能性も考慮する。
 - 過度に強気にならない。根拠が弱ければ confidence を下げる。
 - score は -100〜+100、confidence は 0〜100。
-- rationale と key_factors は日本語で、数値や事実を引用しつつ簡潔に書く。"""
+- rationale と key_factors は日本語で、数値や事実を引用しつつ簡潔に書く。
+
+買い推奨(必ず埋める):
+- 与えられた「現在値(本日±%)」を踏まえて action を決める:
+  まだ動いていない/小幅上昇なら '今すぐ'(初動に乗る)。既に当日大きく上がって
+  いれば '押し目待ち' か '見送り'。引けた後の好材料は '明日以降' も検討する。
+- expected_move_pct: 短期(数日)の想定上昇率(%)を控えめに見積もる(例 5〜15)。
+- priority: 1(低)〜5(高)。確度が高く初動を狙えるほど高くする。"""
 
 
 @dataclass
@@ -175,14 +184,23 @@ class TieredAnalyzer:
         return "\n".join(lines)
 
     async def _add_price_context(self, event: RawEvent, lines_holder: list[str]) -> None:
+        """現在値(本日±%)を取得して精査プロンプトに添える。買い時判断の根拠になる。"""
         if not self.config.analysis.enable_price_context or not event.company_code:
             return
         ticker = to_yahoo_ticker(event.company_code)
         if not ticker:
             return
-        ctx = await asyncio.to_thread(price_context, ticker)
-        if ctx:
-            lines_holder.append(f"直近の値動き: {ctx}")
+        pi = await asyncio.to_thread(current_price, ticker)
+        if not pi:
+            return
+        event.extra["price_at_alert"] = pi  # 通知でも再利用(二重取得を避ける)
+        cur = "¥" if pi.get("currency") == "JPY" else ""
+        chg = (
+            f" (本日 {pi['change_pct']:+.1f}%)"
+            if pi.get("change_pct") is not None
+            else ""
+        )
+        lines_holder.append(f"現在値: {cur}{pi['price']:,.0f}{chg}")
 
     async def _call(
         self, event: RawEvent, model: str, deep: bool

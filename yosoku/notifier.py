@@ -22,6 +22,9 @@ _COLORS = {
 }
 
 
+_ACTION_EMOJI = {"今すぐ": "🔥", "押し目待ち": "⏳", "明日以降": "📅", "見送り": "🚫"}
+
+
 def _format_price(signal: Signal) -> str:
     """通知時点の株価を '¥170 (+3.0%)' のような文字列にする。無ければ空。"""
     pi = signal.event.extra.get("price_at_alert")
@@ -34,25 +37,49 @@ def _format_price(signal: Signal) -> str:
     return s
 
 
+def _format_pts(signal: Signal) -> str:
+    """PTS 価格を '¥177 (18:50)' のような文字列にする。無ければ空。"""
+    p = signal.event.extra.get("pts_price")
+    if not p or p.get("price") is None:
+        return ""
+    cur = "¥" if not p.get("currency") or p.get("currency") == "JPY" else ""
+    t = p.get("time")
+    return f"{cur}{p['price']:,.0f}" + (f" ({t})" if t else "")
+
+
 def build_embed(signal: Signal) -> dict:
     a = signal.analysis
     ticker = signal.display_ticker or "—"
     name = signal.display_name or ""
     price = _format_price(signal)
-    title = f"📈 {name} {ticker}" + (f"  {price}" if price else "")
+    act = (a.action or "").strip()
+    act_emoji = _ACTION_EMOJI.get(act, "")
+    head = f"{act_emoji} " if act_emoji else ""
+    title = f"{head}📈 {name} {ticker}" + (f"  {price}" if price else "")
     title = title.strip()
 
-    fields = [
-        {"name": "方向", "value": a.direction, "inline": True},
+    fields: list[dict] = []
+    if act:
+        fields.append({"name": "買い時", "value": f"{act_emoji} {act}".strip(), "inline": True})
+    if a.priority is not None:
+        p = max(1, min(5, a.priority))
+        fields.append(
+            {"name": "優先度", "value": "★" * p + "☆" * (5 - p) + f" ({a.priority}/5)", "inline": True}
+        )
+    if a.expected_move_pct is not None:
+        fields.append({"name": "想定上昇率", "value": f"+{a.expected_move_pct}%", "inline": True})
+    if price:
+        fields.append({"name": "株価(通知時点)", "value": price, "inline": True})
+    pts = _format_pts(signal)
+    if pts:
+        fields.append({"name": "PTS", "value": pts, "inline": True})
+    fields += [
         {"name": "スコア", "value": f"{a.score:+d}", "inline": True},
         {"name": "確信度", "value": f"{a.confidence}%", "inline": True},
         {"name": "時間軸", "value": a.horizon, "inline": True},
         {"name": "見出し", "value": signal.event.title[:1000], "inline": False},
         {"name": "理由", "value": a.rationale[:1000], "inline": False},
     ]
-    if price:
-        # 株価を分かりやすく専用欄でも出す(通知時点の値)。
-        fields.insert(0, {"name": "株価(通知時点)", "value": price, "inline": True})
     if a.key_factors:
         fields.append(
             {

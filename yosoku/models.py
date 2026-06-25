@@ -70,6 +70,20 @@ class Analysis(BaseModel):
     key_factors: list[str] = Field(
         default_factory=list, description="判断材料の箇条書き(日本語、最大5個)。"
     )
+    expected_move_pct: int | None = Field(
+        default=None,
+        description="短期(数日)の想定上昇率(%)。例: 8。根拠が弱ければ控えめに。不明なら null。",
+    )
+    action: str | None = Field(
+        default=None,
+        description="買いの推奨アクション。次のいずれか: "
+        "'今すぐ'(初動に乗る) / '押し目待ち'(一旦の下げを待つ) / "
+        "'明日以降'(翌営業日を待つ) / '見送り'(手を出さない)。",
+    )
+    priority: int | None = Field(
+        default=None,
+        description="優先度 1(低)〜5(高)。確度が高く今すぐ動くべきほど高い。",
+    )
 
 
 class Signal(BaseModel):

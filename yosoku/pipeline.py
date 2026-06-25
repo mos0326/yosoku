@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from yosoku.analyzer import AnalysisOutcome, TieredAnalyzer
-from yosoku.clock import is_active_now
+from yosoku.clock import is_active_now, is_pts_hours
 from yosoku.config import Config
 from yosoku.metrics import UsageTracker
 from yosoku.models import Analysis, RawEvent, Signal
@@ -24,6 +24,7 @@ from yosoku.notifier import DiscordNotifier
 from yosoku.sources.base import Source
 from yosoku.sources.news_rss import NewsRssSource
 from yosoku.sources.prices import current_price
+from yosoku.sources.pts import pts_price
 from yosoku.sources.tdnet import TdnetSource
 from yosoku.store import Store
 
@@ -192,12 +193,18 @@ class Pipeline:
             notified = False
             if should_notify(outcome.analysis, self.config):
                 result.signals.append(signal)
-                # 通知直前に現在値を取得して載せる(銘柄名の横に株価を出す)。
+                # 通知直前に現在値を載せる(精査で取得済みなら再利用)。
                 ticker = signal.display_ticker
                 if ticker and self.config.analysis.fetch_price_on_alert:
-                    pi = await asyncio.to_thread(current_price, ticker)
-                    if pi:
-                        signal.event.extra["price_at_alert"] = pi
+                    if "price_at_alert" not in signal.event.extra:
+                        pi = await asyncio.to_thread(current_price, ticker)
+                        if pi:
+                            signal.event.extra["price_at_alert"] = pi
+                    # PTS時間帯なら PTS 価格も付ける。
+                    if is_pts_hours():
+                        pts = await asyncio.to_thread(pts_price, ticker)
+                        if pts:
+                            signal.event.extra["pts_price"] = pts
                 if self.dry_run or self.notifier is None:
                     logger.info(
                         "[DRY-RUN] シグナル(%s): %s %s score=%+d conf=%d",

@@ -78,8 +78,9 @@ class AnalysisConfig:
     # トリアージで is_relevant かつ score がこの値以上なら精査へ昇格。
     triage_escalate_score: int = 30
     deep_thinking: bool = True  # 精査で adaptive thinking を使う
-    # 速報優先: 明確な好材料は重い精査を待たず一次判定(高速)で即通知する。
-    fast_alert: bool = True
+    # 速報優先: 明確な好材料を一次判定(高速)で即通知する。精度重視のため既定OFF
+    # (OFFだと有望分は本文PDF+現在値+推論つきの精査に回り、買い時/想定上昇率も精緻化)。
+    fast_alert: bool = False
 
     # --- 一次キーワードフィルタ ---
     relevance_keywords: list[str] = field(

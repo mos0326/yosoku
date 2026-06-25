@@ -142,6 +142,36 @@ def test_embed_shows_price():
     assert any(f["name"].startswith("株価") for f in emb["fields"])
 
 
+def test_embed_shows_action_priority_and_expected_move():
+    from yosoku.notifier import build_embed
+
+    ev = _event()
+    a = _outcome(score=80).analysis
+    a.action = "今すぐ"
+    a.priority = 4
+    a.expected_move_pct = 12
+    sig = Signal(event=ev, analysis=a, stage="deep")
+    emb = build_embed(sig)
+    names = {f["name"]: f["value"] for f in emb["fields"]}
+    assert "🔥" in emb["title"]                 # アクション絵文字がタイトルに付く
+    assert "今すぐ" in names["買い時"]
+    assert "★★★★☆" in names["優先度"]
+    assert names["想定上昇率"] == "+12%"
+
+
+def test_embed_shows_pts_price():
+    from yosoku.notifier import build_embed
+
+    ev = _event()
+    ev.extra["pts_price"] = {"price": 177.0, "time": "18:50　06/25"}
+    sig = Signal(event=ev, analysis=_outcome(score=80).analysis, stage="deep")
+    emb = build_embed(sig)
+    names = {f["name"]: f["value"] for f in emb["fields"]}
+    assert "PTS" in names
+    assert "¥177" in names["PTS"]
+    assert "18:50" in names["PTS"]
+
+
 def test_dedup_events():
     evs = [_event(eid="a"), _event(eid="b"), _event(eid="a")]
     out = dedup_events(evs)

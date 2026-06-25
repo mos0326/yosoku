@@ -116,7 +116,8 @@ def test_single_stage_only_deep():
 
 def test_fast_alert_skips_deep():
     # 明確な好材料(高スコア)は一次判定で即通知し、精査(deep)を呼ばない
-    cfg = _config()  # fast_alert は既定 True
+    cfg = _config()
+    cfg.analysis.fast_alert = True  # 速報優先を明示的に有効化
     client = FakeAsyncClient({"claude-haiku-4-5": _analysis(score=90, conf=80)})
     analyzer = TieredAnalyzer(cfg, client=client, usage=UsageTracker())
     event = RawEvent(

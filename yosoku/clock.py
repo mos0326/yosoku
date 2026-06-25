@@ -55,3 +55,15 @@ def is_active_now(
     if active_window:
         return in_time_window(n, active_window)
     return True
+
+
+def is_pts_hours(now: datetime | None = None) -> bool:
+    """PTS(夜間/寄り前)時間帯か。平日の 寄り前 08:00-09:00 と 引け後 15:00-23:59。
+
+    通常取引(09:00-15:00)中は False(その時間はザラ場価格を使う)。
+    """
+    n = to_jst(now) if now else now_jst()
+    if n.weekday() >= 5:
+        return False
+    t = n.timetz().replace(tzinfo=None)
+    return (time(8, 0) <= t < time(9, 0)) or (t >= time(15, 0))

@@ -1,6 +1,13 @@
 from datetime import datetime, timezone
 
-from yosoku.clock import JST, in_time_window, is_active_now, parse_window, to_jst
+from yosoku.clock import (
+    JST,
+    in_time_window,
+    is_active_now,
+    is_pts_hours,
+    parse_window,
+    to_jst,
+)
 
 
 def test_to_jst_naive_is_treated_as_jst():
@@ -40,3 +47,18 @@ def test_is_active_now():
     # 窓なし(常時) + 平日 → True、土日は weekdays_only で False
     assert is_active_now(None, weekdays_only=True, now=monday_2am) is True
     assert is_active_now(None, weekdays_only=False, now=saturday) is True
+
+
+def test_is_pts_hours():
+    # 2026-06-22 は月曜
+    pre_open = datetime(2026, 6, 22, 8, 30, tzinfo=JST)   # 寄り前 PTS
+    daytime = datetime(2026, 6, 22, 11, 0, tzinfo=JST)    # ザラ場(PTSではない)
+    after_close = datetime(2026, 6, 22, 18, 50, tzinfo=JST)  # 夜間 PTS
+    open_bell = datetime(2026, 6, 22, 9, 0, tzinfo=JST)   # 9:00ちょうどは通常取引
+    saturday = datetime(2026, 6, 20, 18, 50, tzinfo=JST)  # 土曜は休み
+
+    assert is_pts_hours(pre_open) is True
+    assert is_pts_hours(daytime) is False
+    assert is_pts_hours(after_close) is True
+    assert is_pts_hours(open_bell) is False
+    assert is_pts_hours(saturday) is False
