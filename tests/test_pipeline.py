@@ -278,7 +278,11 @@ def test_startup_ping_sent_once():
 def test_watch_max_runtime_terminates():
     # max_runtime=0 なら1サイクル実行してクリーン終了する(無限ループしない)
     ev = _event(eid="tdnet:watch")
-    pipe, store, analyzer, notifier = _pipeline([ev], {"tdnet:watch": _outcome(score=90)})
+    cfg = Config()
+    cfg.weekdays_only = False  # 実行日の曜日に依存せず1サイクル走らせる
+    pipe, store, analyzer, notifier = _pipeline(
+        [ev], {"tdnet:watch": _outcome(score=90)}, cfg=cfg
+    )
     # 戻ってくれば(ハングしなければ)成功
     asyncio.run(pipe.watch(interval=0, max_runtime=0))
     assert "tdnet:watch" in analyzer.calls

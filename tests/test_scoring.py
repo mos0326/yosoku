@@ -7,6 +7,7 @@ from yosoku.scoring import (
     is_anomalous,
     realized_return,
     score_pending,
+    weekly_report_message,
     window_status,
 )
 from yosoku.store import Store
@@ -223,6 +224,20 @@ def test_score_pending_no_price_leaves_pending():
     assert store.outcome_rows()[0]["status"] is None
     assert len(store.pending_alerts()) == 1
     store.close()
+
+
+def test_weekly_report_message_format():
+    rows = [
+        {"entry_price": 100, "status": "scored", "return_pct": 0.08, "score": 85,
+         "expected_move_pct": 5},
+    ]
+    rep = accuracy_report(rows)
+    msg = weekly_report_message(rep, now_label="2026-06-27")
+    assert msg.startswith("📊 **週次精度レポート**")
+    assert "2026-06-27" in msg
+    assert "```" in msg                         # 等幅コードブロックで囲む
+    assert "通知後リターン実績" in msg          # 本文を含む
+    assert len(msg) < 2000                       # Discord の上限内
 
 
 def test_accuracy_report_scored_with_none_return_is_unavailable():

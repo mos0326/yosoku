@@ -214,6 +214,15 @@ def _has(row, key: str) -> bool:
         return False
 
 
+def weekly_report_message(rep: AccuracyReport, now_label: str | None = None) -> str:
+    """精度レポートを Discord 投稿用の文字列にする(純関数)。
+
+    等幅で桁が揃うようコードブロックで囲む。Discord の 2000 字上限に収まる短さ。
+    """
+    head = "📊 **週次精度レポート**" + (f"({now_label})" if now_label else "")
+    return f"{head}\n```\n{rep.render()}\n```"
+
+
 # ---- I/O(採点パス) --------------------------------------------------------
 
 

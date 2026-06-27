@@ -146,6 +146,22 @@ def cmd_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def _post_report(cfg: Config, rep) -> int:
+    """精度レポートを Discord に投稿する。実績ゼロや webhook 未設定なら穏便にスキップ。"""
+    if rep.total == 0:
+        print("通知実績がまだ無いため Discord 投稿はスキップ。")
+        return 0
+    if not cfg.discord_webhook_url:
+        print("DISCORD_WEBHOOK_URL 未設定のため投稿をスキップ。", file=sys.stderr)
+        return 0
+    from yosoku.notifier import DiscordNotifier
+    from yosoku.scoring import weekly_report_message
+
+    ok = DiscordNotifier(cfg.discord_webhook_url).notify_text(weekly_report_message(rep))
+    print("Discord投稿:", "成功" if ok else "失敗")
+    return 0 if ok else 1
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     """通知の答え合わせ:採点窓に入った通知を評価し、精度レポートを表示する。"""
     cfg = load_config(args.config)
@@ -165,6 +181,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         f"too_early={counts['too_early']} no_price={counts['no_price']}"
     )
     print(rep.render())
+    if getattr(args, "notify", False):
+        return _post_report(cfg, rep)
     return 0
 
 
@@ -176,6 +194,8 @@ def cmd_accuracy(args: argparse.Namespace) -> int:
     with open_store(cfg.store_path) as store:
         rep = accuracy_report(store.outcome_rows(), hit_threshold=args.hit_threshold)
     print(rep.render())
+    if getattr(args, "notify", False):
+        return _post_report(cfg, rep)
     return 0
 
 
@@ -249,12 +269,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--hit-threshold", type=float, default=0.005,
         help="コスト控除後の『勝ち』しきい値(小数, 既定0.005=0.5%%)",
     )
+    p_score.add_argument(
+        "--notify", action="store_true", help="精度レポートを Discord に投稿する",
+    )
     p_score.set_defaults(func=cmd_score)
 
     p_acc = sub.add_parser("accuracy", help="蓄積済みの答え合わせ結果から精度を表示")
     p_acc.add_argument(
         "--hit-threshold", type=float, default=0.005,
         help="コスト控除後の『勝ち』しきい値(小数, 既定0.005=0.5%%)",
+    )
+    p_acc.add_argument(
+        "--notify", action="store_true", help="精度レポートを Discord に投稿する",
     )
     p_acc.set_defaults(func=cmd_accuracy)
 

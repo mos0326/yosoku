@@ -1,0 +1,46 @@
+# 週次の精度レポートを Discord に自動投稿するワークフロー。
+#
+# 仕組み:
+#  - 毎週土曜 09:00 JST に起動(取引が無い週末に1週間の実績を振り返る)。
+#  - センサー(sensor.yml)が貯めた状態DB(alerts/outcomes)をキャッシュから復元。
+#  - `score --notify` で採点窓に入った通知を採点 → 精度レポートを Discord に投稿。
+#  - 読み取り専用(cache/restore)。outcomes はセンサー側の score でも再生成される。
+#
+# 使い方: DISCORD_WEBHOOK_URL を Secrets に登録済みなら設定不要。
+#         手動で出したいときは Actions →「yosoku-weekly-report」→「Run workflow」。
+
+name: yosoku-weekly-report
+
+on:
+  schedule:
+    - cron: "0 0 * * 6"   # 毎週土曜 09:00 JST(= 土 00:00 UTC)
+  workflow_dispatch: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e .
+
+      # センサーが保存した最新の状態DBを復元(読み取り専用、保存はしない)。
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: yosoku_state.db
+          key: yosoku-weekly-${{ github.run_id }}
+          restore-keys: |
+            yosoku-state-
+
+      # 採点して精度レポートを Discord に投稿(株価のみ・APIキー不要)。
+      - name: Score & post weekly report
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python -m yosoku score --notify
