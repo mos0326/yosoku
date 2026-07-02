@@ -16,6 +16,9 @@ import yaml
 DEFAULT_MODEL = "claude-opus-4-8"
 # 全件トリアージに使う安価・高速モデル。
 DEFAULT_TRIAGE_MODEL = "claude-haiku-4-5"
+# 最終判定(通知直前のセカンドオピニオン)に使うモデル。Opus より上位の Fable を
+# 通知候補(1日数件)だけに使う。単価は Opus の2倍だが件数が少ないため影響は小さい。
+DEFAULT_ARBITER_MODEL = "claude-fable-5"
 
 # ニュース RSS の既定フィード。無料かつ比較的安定なものを初期値にしている。
 DEFAULT_NEWS_FEEDS = [
@@ -71,6 +74,12 @@ class AnalysisConfig:
     fetch_document: bool = True  # 開示PDF本文を抽出して精査に渡す
     max_document_chars: int = 6000  # 本文の最大文字数
     enable_web_context: bool = False  # Web検索で追加文脈(実験的)
+
+    # --- 最終判定(通知直前のセカンドオピニオン) ---
+    # 通知条件を満たしたシグナルだけを上位モデルが最終ゲートとして精査し、
+    # 承認/却下と買い推奨の微修正を行う。失敗時はそのまま通知(フェイルオープン)。
+    enable_arbiter: bool = True
+    arbiter_model: str = DEFAULT_ARBITER_MODEL
 
     # --- 二段階分析(triage -> deep) ---
     two_stage: bool = True
@@ -166,6 +175,8 @@ def load_config(path: str | None = None) -> Config:
             a.get("max_document_chars"), ac.max_document_chars
         )
         ac.enable_web_context = bool(a.get("enable_web_context", ac.enable_web_context))
+        ac.enable_arbiter = bool(a.get("enable_arbiter", ac.enable_arbiter))
+        ac.arbiter_model = a.get("arbiter_model", ac.arbiter_model)
         ac.two_stage = bool(a.get("two_stage", ac.two_stage))
         ac.triage_model = a.get("triage_model", ac.triage_model)
         ac.triage_escalate_score = _as_int(
@@ -194,5 +205,7 @@ def load_config(path: str | None = None) -> Config:
         cfg.model = os.environ["YOSOKU_MODEL"]
     if os.environ.get("YOSOKU_TRIAGE_MODEL"):
         cfg.analysis.triage_model = os.environ["YOSOKU_TRIAGE_MODEL"]
+    if os.environ.get("YOSOKU_ARBITER_MODEL"):
+        cfg.analysis.arbiter_model = os.environ["YOSOKU_ARBITER_MODEL"]
 
     return cfg

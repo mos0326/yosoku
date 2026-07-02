@@ -86,6 +86,32 @@ class Analysis(BaseModel):
     )
 
 
+class ArbiterVerdict(BaseModel):
+    """最終判定(通知直前のセカンドオピニオン)の構造化出力スキーマ。
+
+    精査(deep)が「通知に値する」と判断したシグナルだけを、より高性能な
+    モデルが最終ゲートとして承認/却下し、買い推奨を微修正する。
+    """
+
+    approve: bool = Field(
+        description="通知して良い(買い材料として妥当)なら true。"
+        "織り込み済み・材料薄・リスク過大なら false。"
+    )
+    reason: str = Field(description="判定理由(日本語、1〜2文。通知にも表示される)。")
+    action: str | None = Field(
+        default=None,
+        description="買い時の修正案(必要な場合のみ): "
+        "'今すぐ' / '押し目待ち' / '明日以降' / '見送り'。修正不要なら null。",
+    )
+    priority: int | None = Field(
+        default=None, description="優先度の修正案 1〜5(必要な場合のみ)。不要なら null。"
+    )
+    expected_move_pct: int | None = Field(
+        default=None,
+        description="想定上昇率(%)の修正案(必要な場合のみ)。不要なら null。",
+    )
+
+
 class Signal(BaseModel):
     """生イベントと分析結果のペア。"""
 

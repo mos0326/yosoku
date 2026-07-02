@@ -33,6 +33,7 @@ sources/* → 一次フィルタ → 重複排除(store) → 分析(analyzer) �
   - `pts.py`    : PTS(夜間/寄り前)価格を株探から best-effort 取得。`parse_pts` は純関数。
   - `document.py`: 開示PDF本文の抽出(pypdf)。
 - `yosoku/analyzer.py` : `TieredAnalyzer`。triage(安価) → deep(高性能+thinking) の二段階・非同期。
+  `arbitrate` は通知直前の最終判定(上位モデルのセカンドオピニオン)。失敗時はフェイルオープン。
 - `yosoku/pipeline.py` : 非同期オーケストレーション。`should_notify`/`passes_prefilter` は純関数。
   通知成功時に `_freeze_alert` でエントリー価格を `alerts` に凍結(答え合わせの起点)。
 - `yosoku/store.py`    : SQLite。`seen`(重複)/`signals`(履歴)/`alerts`(エントリー凍結・不変)/`outcomes`(答え合わせ)。
@@ -50,7 +51,8 @@ sources/* → 一次フィルタ → 重複排除(store) → 分析(analyzer) �
 - **シークレットは環境変数のみ**(`ANTHROPIC_API_KEY`, `DISCORD_WEBHOOK_URL`)。
   YAML やコードに書かない。
 - 失敗は握りつぶして継続(1件の取得/分析失敗で全体を止めない)。
-- モデル ID は変更しない(既定: deep=`claude-opus-4-8`, triage=`claude-haiku-4-5`)。
+- モデル ID は変更しない(既定: deep=`claude-opus-4-8`, triage=`claude-haiku-4-5`,
+  arbiter=`claude-fable-5`)。arbiter の呼び出しに `thinking` パラメータを渡さない(常時ONのため400になる)。
 - 変更後は `ruff check .` と `pytest -q` を通す。
 
 ## 拡張ポイント

@@ -80,6 +80,15 @@ def build_embed(signal: Signal) -> dict:
         {"name": "見出し", "value": signal.event.title[:1000], "inline": False},
         {"name": "理由", "value": a.rationale[:1000], "inline": False},
     ]
+    arb = signal.event.extra.get("arbiter")
+    if arb and arb.get("approve") and arb.get("reason"):
+        fields.append(
+            {
+                "name": "🧠 最終判定",
+                "value": f"承認 — {arb['reason']}"[:1000],
+                "inline": False,
+            }
+        )
     if a.key_factors:
         fields.append(
             {

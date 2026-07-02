@@ -21,7 +21,7 @@ import anthropic
 
 from yosoku.config import Config
 from yosoku.metrics import UsageTracker
-from yosoku.models import Analysis, RawEvent
+from yosoku.models import Analysis, ArbiterVerdict, RawEvent
 from yosoku.research import gather_web_context
 from yosoku.sources.document import fetch_document_text
 from yosoku.sources.prices import current_price, to_yahoo_ticker
@@ -63,6 +63,23 @@ DEEP_SYSTEM = """\
   いれば '押し目待ち' か '見送り'。引けた後の好材料は '明日以降' も検討する。
 - expected_move_pct: 短期(数日)の想定上昇率(%)を控えめに見積もる(例 5〜15)。
 - priority: 1(低)〜5(高)。確度が高く初動を狙えるほど高くする。"""
+
+ARBITER_SYSTEM = """\
+あなたは日本株ファンドの最終意思決定者(シニアPM)です。アナリストが「買い」と
+判断したシグナルが1件だけ回ってきます。通知(=ユーザーの売買トリガー)に値するかを
+最終判定してください。あなたの却下はそのまま通知の取りやめになります。
+
+判定の観点:
+- 材料の新規性と強さ: 定型開示・軽微な修正・観測の後追いは却下。
+- 織り込み度: 現在値が既に大きく上げているなら出尽くしを疑う。
+- 実行可能性: 一般の個人投資家が明日までに妥当な価格で買えるか。
+- アナリストの根拠に飛躍・過大評価がないか(数字と整合しているか)。
+
+出力:
+- 迷ったら approve=false(通知は少なく正確に。誤報1件は信頼を大きく損なう)。
+- reason は1〜2文で、ユーザーがそのまま読める日本語で書く。
+- action / priority / expected_move_pct は「修正が必要な場合のみ」埋める
+  (アナリスト案が妥当なら null のままにする)。"""
 
 
 @dataclass
@@ -136,6 +153,72 @@ class TieredAnalyzer:
             and triage.confidence >= a.confidence_threshold
             and (triage.ticker is not None or a.notify_tickerless)
         )
+
+    async def arbitrate(
+        self, event: RawEvent, analysis: Analysis
+    ) -> ArbiterVerdict | None:
+        """通知直前の最終判定(上位モデルによるセカンドオピニオン)。
+
+        失敗・拒否・パース不能はすべて None を返し、呼び出し側はそのまま通知する
+        (フェイルオープン: 最終判定が使えなくてもアラートを取りこぼさない)。
+        """
+        a = self.config.analysis
+        lines = [f"見出し: {event.title}"]
+        if event.company_name:
+            lines.append(f"企業名: {event.company_name}")
+        if event.company_code:
+            lines.append(f"証券コード: {event.company_code}")
+        if event.published_at:
+            lines.append(f"開示時刻: {event.published_at:%Y-%m-%d %H:%M}")
+        lines.append(
+            "\n--- アナリスト(精査)の評価 ---\n"
+            f"score={analysis.score:+d} confidence={analysis.confidence} "
+            f"direction={analysis.direction} horizon={analysis.horizon}\n"
+            f"action={analysis.action} priority={analysis.priority} "
+            f"expected_move_pct={analysis.expected_move_pct}\n"
+            f"理由: {analysis.rationale}\n"
+            f"材料: {' / '.join(analysis.key_factors[:5])}"
+        )
+        pi = event.extra.get("price_at_alert") or {}
+        if pi.get("price") is not None:
+            chg = (
+                f" (本日 {pi['change_pct']:+.1f}%)"
+                if pi.get("change_pct") is not None
+                else ""
+            )
+            lines.append(f"現在値: {pi['price']:,.0f}{chg}")
+        pts = event.extra.get("pts_price") or {}
+        if pts.get("price") is not None:
+            lines.append(f"PTS: {pts['price']:,.0f}")
+        if event.document_text:
+            lines.append(f"\n--- 開示本文(抜粋) ---\n{event.document_text[:1200]}\n---")
+        lines.append("\nこのシグナルを通知して良いか最終判定してください。")
+
+        try:
+            # Fable は thinking 常時ONのため thinking パラメータは渡さない(渡すと400)。
+            response = await self.client.messages.parse(
+                model=a.arbiter_model,
+                max_tokens=8192,
+                system=ARBITER_SYSTEM,
+                messages=[{"role": "user", "content": "\n".join(lines)}],
+                output_format=ArbiterVerdict,
+            )
+        except anthropic.APIError as e:
+            logger.warning("最終判定に失敗(%s, %s): %s", event.event_id, a.arbiter_model, e)
+            return None
+        except Exception as e:  # パース失敗など
+            logger.warning("最終判定の応答処理に失敗(%s): %s", event.event_id, e)
+            return None
+
+        self.usage.add(a.arbiter_model, getattr(response, "usage", None))
+        if getattr(response, "stop_reason", None) == "refusal":
+            logger.warning("最終判定がセーフティ拒否(%s)。通知はそのまま実施。", event.event_id)
+            return None
+        verdict = getattr(response, "parsed_output", None)
+        if verdict is None:
+            logger.warning("最終判定の構造化出力が空: %s", event.event_id)
+            return None
+        return verdict
 
     # ---- 内部 -----------------------------------------------------------
 

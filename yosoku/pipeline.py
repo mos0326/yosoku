@@ -19,7 +19,7 @@ from yosoku.analyzer import AnalysisOutcome, TieredAnalyzer
 from yosoku.clock import is_active_now, is_pts_hours
 from yosoku.config import Config
 from yosoku.metrics import UsageTracker
-from yosoku.models import Analysis, RawEvent, Signal
+from yosoku.models import Analysis, ArbiterVerdict, RawEvent, Signal
 from yosoku.notifier import DiscordNotifier
 from yosoku.sources.base import Source
 from yosoku.sources.news_rss import NewsRssSource
@@ -66,6 +66,17 @@ def should_notify(analysis: Analysis, config: Config) -> bool:
     if analysis.ticker is None and not a.notify_tickerless:
         return False
     return True
+
+
+def apply_verdict(analysis: Analysis, verdict: ArbiterVerdict) -> Analysis:
+    """最終判定の修正案を分析結果に反映する(純関数・None のフィールドは据え置き)。"""
+    if verdict.action:
+        analysis.action = verdict.action
+    if verdict.priority is not None:
+        analysis.priority = verdict.priority
+    if verdict.expected_move_pct is not None:
+        analysis.expected_move_pct = verdict.expected_move_pct
+    return analysis
 
 
 def dedup_events(events: list[RawEvent]) -> list[RawEvent]:
@@ -191,6 +202,7 @@ class Pipeline:
             signal = Signal(event=event, analysis=outcome.analysis, stage=outcome.stage)
 
             notified = False
+            vetoed = False
             if should_notify(outcome.analysis, self.config):
                 result.signals.append(signal)
                 # 通知直前に現在値を載せる(精査で取得済みなら再利用)。
@@ -205,18 +217,36 @@ class Pipeline:
                         pts = await asyncio.to_thread(pts_price, ticker)
                         if pts:
                             signal.event.extra["pts_price"] = pts
-                if self.dry_run or self.notifier is None:
-                    logger.info(
-                        "[DRY-RUN] シグナル(%s): %s %s score=%+d conf=%d",
-                        signal.stage,
-                        signal.display_name,
-                        signal.display_ticker,
-                        outcome.analysis.score,
-                        outcome.analysis.confidence,
-                    )
-                    notified = True
-                else:
-                    notified = self.notifier.notify(signal)
+                # 最終判定: 上位モデルが通知直前に承認/却下(失敗時はそのまま通知)。
+                verdict = await self._arbitrate(signal)
+                if verdict is not None:
+                    signal.event.extra["arbiter"] = {
+                        "approve": verdict.approve,
+                        "reason": verdict.reason,
+                    }
+                    if verdict.approve:
+                        apply_verdict(signal.analysis, verdict)
+                    else:
+                        vetoed = True
+                        logger.info(
+                            "最終判定で却下: %s %s — %s",
+                            signal.display_name,
+                            signal.display_ticker,
+                            verdict.reason,
+                        )
+                if not vetoed:
+                    if self.dry_run or self.notifier is None:
+                        logger.info(
+                            "[DRY-RUN] シグナル(%s): %s %s score=%+d conf=%d",
+                            signal.stage,
+                            signal.display_name,
+                            signal.display_ticker,
+                            outcome.analysis.score,
+                            outcome.analysis.confidence,
+                        )
+                        notified = True
+                    else:
+                        notified = self.notifier.notify(signal)
                 if notified:
                     result.notified += 1
                     # 実送信した通知のみ、答え合わせ用にエントリー価格を不変で凍結する
@@ -240,6 +270,23 @@ class Pipeline:
             result.cost,
         )
         return result
+
+    async def _arbitrate(self, signal: Signal) -> ArbiterVerdict | None:
+        """通知直前の最終判定を(有効時のみ)実行する。使えなければ None。
+
+        アナライザーが arbitrate を持たない(テスト用フェイク等)場合や
+        呼び出し失敗時も None = 「判定なし・そのまま通知」に倒す。
+        """
+        if not self.config.analysis.enable_arbiter:
+            return None
+        arbitrate = getattr(self.analyzer, "arbitrate", None)
+        if arbitrate is None:
+            return None
+        try:
+            return await arbitrate(signal.event, signal.analysis)
+        except Exception:
+            logger.exception("最終判定で例外(%s)。そのまま通知する。", signal.event.event_id)
+            return None
 
     def _freeze_alert(self, signal: Signal) -> None:
         """通知が飛んだ瞬間のエントリー価格を alerts に凍結する(答え合わせの起点)。

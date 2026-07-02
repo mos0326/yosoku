@@ -156,3 +156,59 @@ def test_usage_is_tracked():
     _run(analyzer.analyze(event))
     assert usage.total_calls == 2
     assert usage.total_cost > 0
+
+
+# ---- 最終判定(arbitrate) --------------------------------------------------
+
+
+def _verdict(approve=True, reason="OK"):
+    from yosoku.models import ArbiterVerdict
+
+    return ArbiterVerdict(approve=approve, reason=reason)
+
+
+def test_arbitrate_returns_verdict_without_thinking_param():
+    cfg = _config()
+    client = FakeAsyncClient({"claude-fable-5": _verdict(approve=True, reason="妥当")})
+    analyzer = TieredAnalyzer(cfg, client=client, usage=UsageTracker())
+    event = RawEvent(source="tdnet", event_id="tdnet:arb", title="上方修正", company_code="72030")
+    out = _run(analyzer.arbitrate(event, _analysis(score=85)))
+    assert out is not None and out.approve is True
+    call = client.messages.calls[-1]
+    assert call["model"] == "claude-fable-5"
+    # thinking 常時ONのモデルなので thinking パラメータを渡さない(渡すと400)
+    assert "thinking" not in call
+
+
+def test_arbitrate_refusal_returns_none():
+    class RefusingMessages(FakeAsyncMessages):
+        async def parse(self, **kwargs):
+            resp = await super().parse(**kwargs)
+            resp.stop_reason = "refusal"
+            return resp
+
+    cfg = _config()
+    client = FakeAsyncClient({"claude-fable-5": _verdict()})
+    client.messages = RefusingMessages({"claude-fable-5": _verdict()})
+    analyzer = TieredAnalyzer(cfg, client=client, usage=UsageTracker())
+    event = RawEvent(source="tdnet", event_id="tdnet:ref", title="上方修正", company_code="72030")
+    out = _run(analyzer.arbitrate(event, _analysis(score=85)))
+    assert out is None  # 拒否はフェイルオープン(呼び出し側がそのまま通知)
+
+
+def test_arbitrate_error_returns_none():
+    class BoomMessages:
+        async def parse(self, **kwargs):
+            raise RuntimeError("boom")
+
+    class BoomClient:
+        def __init__(self):
+            self.messages = BoomMessages()
+
+        async def close(self):
+            pass
+
+    analyzer = TieredAnalyzer(_config(), client=BoomClient(), usage=UsageTracker())
+    event = RawEvent(source="tdnet", event_id="tdnet:err", title="上方修正", company_code="72030")
+    out = _run(analyzer.arbitrate(event, _analysis(score=85)))
+    assert out is None

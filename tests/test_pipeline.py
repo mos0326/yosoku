@@ -3,9 +3,10 @@ import asyncio
 from yosoku.analyzer import AnalysisOutcome
 from yosoku.config import Config
 from yosoku.metrics import UsageTracker
-from yosoku.models import Analysis, RawEvent, Signal
+from yosoku.models import Analysis, ArbiterVerdict, RawEvent, Signal
 from yosoku.pipeline import (
     Pipeline,
+    apply_verdict,
     dedup_events,
     passes_prefilter,
     should_notify,
@@ -46,6 +47,22 @@ class FakeNotifier:
     def notify(self, signal: Signal) -> bool:
         self.sent.append(signal)
         return self.succeed
+
+
+class FakeArbiterAnalyzer(FakeAnalyzer):
+    """arbitrate 付きのフェイク(verdict=None なら判定なし、例外なら失敗を再現)。"""
+
+    def __init__(self, mapping, verdict=None, raise_error=False):
+        super().__init__(mapping)
+        self.verdict = verdict
+        self.raise_error = raise_error
+        self.arbitrated = []
+
+    async def arbitrate(self, event, analysis):
+        self.arbitrated.append(event.event_id)
+        if self.raise_error:
+            raise RuntimeError("arbiter down")
+        return self.verdict
 
 
 def _event(eid="tdnet:1", source="tdnet", title="2026年3月期 決算短信〔上方修正〕", code="72030"):
@@ -181,11 +198,11 @@ def test_dedup_events():
 # ---- run_once 統合 --------------------------------------------------------
 
 
-def _pipeline(events, mapping, cfg=None, notifier=None):
+def _pipeline(events, mapping, cfg=None, notifier=None, analyzer=None):
     cfg = cfg or Config()
     cfg.analysis.fetch_price_on_alert = False  # テストでは実ネットワークを叩かない
     store = Store(":memory:")
-    analyzer = FakeAnalyzer(mapping)
+    analyzer = analyzer or FakeAnalyzer(mapping)
     notifier = notifier if notifier is not None else FakeNotifier()
     pipe = Pipeline(
         config=cfg,
@@ -300,3 +317,65 @@ def test_run_once_concurrent_many():
     result = _run(pipe)
     assert result.analyzed == 20
     assert result.notified == 10
+
+
+# ---- 最終判定(arbiter) ----------------------------------------------------
+
+
+def test_apply_verdict_partial_override():
+    a = _outcome(score=80).analysis
+    a.action, a.priority, a.expected_move_pct = "今すぐ", 4, 10
+    v = ArbiterVerdict(approve=True, reason="妥当", action="押し目待ち")
+    apply_verdict(a, v)
+    assert a.action == "押し目待ち"
+    assert a.priority == 4            # None のフィールドは据え置き
+    assert a.expected_move_pct == 10
+
+
+def test_arbiter_veto_blocks_notification():
+    ev = _event()
+    veto = ArbiterVerdict(approve=False, reason="織り込み済みと判断")
+    analyzer = FakeArbiterAnalyzer({"tdnet:1": _outcome(score=90)}, verdict=veto)
+    pipe, store, _, notifier = _pipeline([ev], {}, analyzer=analyzer)
+    result = _run(pipe)
+    assert result.notified == 0
+    assert notifier.sent == []
+    assert analyzer.arbitrated == ["tdnet:1"]
+    assert store.is_seen("tdnet:1")   # 却下は確定扱い(次サイクルで再通知しない)
+
+
+def test_arbiter_approve_refines_and_notifies():
+    from yosoku.notifier import build_embed
+
+    ev = _event()
+    ok = ArbiterVerdict(approve=True, reason="初動前で妥当", action="今すぐ", priority=5)
+    analyzer = FakeArbiterAnalyzer({"tdnet:1": _outcome(score=90)}, verdict=ok)
+    pipe, store, _, notifier = _pipeline([ev], {}, analyzer=analyzer)
+    result = _run(pipe)
+    assert result.notified == 1
+    sig = notifier.sent[0]
+    assert sig.analysis.action == "今すぐ"
+    assert sig.analysis.priority == 5
+    names = {f["name"]: f["value"] for f in build_embed(sig)["fields"]}
+    assert "🧠 最終判定" in names
+    assert "初動前で妥当" in names["🧠 最終判定"]
+
+
+def test_arbiter_failure_fails_open():
+    ev = _event()
+    analyzer = FakeArbiterAnalyzer({"tdnet:1": _outcome(score=90)}, raise_error=True)
+    pipe, store, _, notifier = _pipeline([ev], {}, analyzer=analyzer)
+    result = _run(pipe)
+    assert result.notified == 1       # 判定が使えなくても通知は落とさない
+
+
+def test_arbiter_disabled_skips_call():
+    ev = _event()
+    cfg = Config()
+    cfg.analysis.enable_arbiter = False
+    veto = ArbiterVerdict(approve=False, reason="使われないはず")
+    analyzer = FakeArbiterAnalyzer({"tdnet:1": _outcome(score=90)}, verdict=veto)
+    pipe, store, _, notifier = _pipeline([ev], {}, cfg=cfg, analyzer=analyzer)
+    result = _run(pipe)
+    assert result.notified == 1
+    assert analyzer.arbitrated == []  # 無効時は呼ばれない
