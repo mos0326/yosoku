@@ -13,10 +13,11 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timezone
 from typing import Protocol
 
 from yosoku.analyzer import AnalysisOutcome, TieredAnalyzer
-from yosoku.clock import is_active_now, is_pts_hours
+from yosoku.clock import is_active_now, is_pts_hours, now_jst, to_jst
 from yosoku.config import Config
 from yosoku.metrics import UsageTracker
 from yosoku.models import Analysis, ArbiterVerdict, RawEvent, Signal
@@ -77,6 +78,24 @@ def apply_verdict(analysis: Analysis, verdict: ArbiterVerdict) -> Analysis:
     if verdict.expected_move_pct is not None:
         analysis.expected_move_pct = verdict.expected_move_pct
     return analysis
+
+
+def _signal_from_row(row) -> Signal | None:
+    """signals テーブルの行から通知用の Signal を復元する(補欠通知用・失敗時 None)。"""
+    try:
+        analysis = Analysis.model_validate_json(row["raw"])
+    except Exception:
+        return None
+    if analysis.ticker is None and row["ticker"]:
+        analysis.ticker = row["ticker"]
+    event = RawEvent(
+        source=row["source"] or "tdnet",
+        event_id=row["event_id"],
+        title=row["title"] or "",
+        url=row["url"],
+        company_name=row["company_name"],
+    )
+    return Signal(event=event, analysis=analysis, stage=row["stage"] or "deep")
 
 
 def dedup_events(events: list[RawEvent]) -> list[RawEvent]:
@@ -205,18 +224,8 @@ class Pipeline:
             vetoed = False
             if should_notify(outcome.analysis, self.config):
                 result.signals.append(signal)
-                # 通知直前に現在値を載せる(精査で取得済みなら再利用)。
-                ticker = signal.display_ticker
-                if ticker and self.config.analysis.fetch_price_on_alert:
-                    if "price_at_alert" not in signal.event.extra:
-                        pi = await asyncio.to_thread(current_price, ticker)
-                        if pi:
-                            signal.event.extra["price_at_alert"] = pi
-                    # PTS時間帯なら PTS 価格も付ける。
-                    if is_pts_hours():
-                        pts = await asyncio.to_thread(pts_price, ticker)
-                        if pts:
-                            signal.event.extra["pts_price"] = pts
+                # 通知直前に現在値(+PTS)を載せる(精査で取得済みなら再利用)。
+                await self._attach_prices(signal)
                 # 最終判定: 上位モデルが通知直前に承認/却下(失敗時はそのまま通知)。
                 verdict = await self._arbitrate(signal)
                 if verdict is not None:
@@ -257,6 +266,12 @@ class Pipeline:
             self.store.record_signal(signal, notified=notified)
             self.store.mark_seen(event.event_id, event.source, notified=notified)
 
+        # 5) デイリーピック: 夕方時点で当日の通知が不足していれば補欠で埋める。
+        try:
+            await self._maybe_daily_pick()
+        except Exception:
+            logger.exception("デイリーピックで例外。継続する。")
+
         if self.usage is not None:
             result.cost = self.usage.total_cost
             result.usage_summary = self.usage.summary()
@@ -270,6 +285,80 @@ class Pipeline:
             result.cost,
         )
         return result
+
+    async def _attach_prices(self, signal: Signal) -> None:
+        """通知直前に現在値(+PTS時間帯なら PTS 価格)を event.extra に付与する。"""
+        ticker = signal.display_ticker
+        if not ticker or not self.config.analysis.fetch_price_on_alert:
+            return
+        if "price_at_alert" not in signal.event.extra:
+            pi = await asyncio.to_thread(current_price, ticker)
+            if pi:
+                signal.event.extra["price_at_alert"] = pi
+        if is_pts_hours() and "pts_price" not in signal.event.extra:
+            pts = await asyncio.to_thread(pts_price, ticker)
+            if pts:
+                signal.event.extra["pts_price"] = pts
+
+    async def _maybe_daily_pick(self, now=None) -> None:
+        """当日の通知が最低件数に満たなければ、上位候補を「補欠」として通知する。
+
+        daily_pick_time(JST)以降に1日1回だけ発火。対象は当日分析済みで
+        未通知(基準未達・最終判定見送り)の強気シグナルのスコア上位。
+        """
+        a = self.config.analysis
+        if self.dry_run or self.notifier is None or a.min_daily_alerts <= 0:
+            return
+        n = to_jst(now) if now else now_jst()
+        try:
+            hh, mm = (int(x) for x in a.daily_pick_time.split(":"))
+        except ValueError:
+            logger.warning("daily_pick_time が不正: %r", a.daily_pick_time)
+            return
+        if (n.hour, n.minute) < (hh, mm):
+            return
+        meta_key = f"daily_pick:{n.date().isoformat()}"
+        if self.store.get_meta(meta_key) is not None:
+            return  # 本日分は実施済み
+
+        day_start = n.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start_utc = day_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        need = a.min_daily_alerts - self.store.count_notified_since(day_start_utc)
+        if need <= 0:
+            self.store.set_meta(meta_key, "0")  # 自然に足りた日は何もしない
+            return
+
+        sent = 0
+        seen_tickers: set[str] = set()
+        candidates = self.store.top_unnotified_since(
+            day_start_utc, limit=need + 5, min_score=a.daily_pick_min_score
+        )
+        for row in candidates:
+            if sent >= need:
+                break
+            signal = _signal_from_row(row)
+            if signal is None:
+                continue
+            ticker = signal.display_ticker
+            if ticker in seen_tickers:
+                continue  # 同一銘柄は1日1回まで
+            signal.event.extra["daily_pick"] = True
+            await self._attach_prices(signal)
+            if self.notifier.notify(signal):
+                sent += 1
+                if ticker:
+                    seen_tickers.add(ticker)
+                self.store.set_signal_notified(signal.event.event_id)
+                self._freeze_alert(signal)
+        self.store.set_meta(meta_key, str(sent))  # 失敗込みで1日1回だけ試行
+        if sent < need:
+            send_text = getattr(self.notifier, "notify_text", None)
+            if send_text:
+                send_text(
+                    f"🌙 定時ピック: 本日の通知は {a.min_daily_alerts - need + sent}件でした。"
+                    f"基準(score≥{a.daily_pick_min_score})に届く補欠候補が足りませんでした。"
+                )
+        logger.info("デイリーピック: %d件送信(不足%d件)", sent, need)
 
     async def _arbitrate(self, signal: Signal) -> ArbiterVerdict | None:
         """通知直前の最終判定を(有効時のみ)実行する。使えなければ None。

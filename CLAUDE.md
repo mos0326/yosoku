@@ -36,6 +36,7 @@ sources/* → 一次フィルタ → 重複排除(store) → 分析(analyzer) �
   `arbitrate` は通知直前の最終判定(上位モデルのセカンドオピニオン)。失敗時はフェイルオープン。
 - `yosoku/pipeline.py` : 非同期オーケストレーション。`should_notify`/`passes_prefilter` は純関数。
   通知成功時に `_freeze_alert` でエントリー価格を `alerts` に凍結(答え合わせの起点)。
+  `_maybe_daily_pick` は夕方時点で当日通知が `min_daily_alerts` 未満なら上位候補を「補欠」通知。
 - `yosoku/store.py`    : SQLite。`seen`(重複)/`signals`(履歴)/`alerts`(エントリー凍結・不変)/`outcomes`(答え合わせ)。
 - `yosoku/scoring.py`  : 答え合わせ。実通知の後刻リターンを採点し精度集計。
   `realized_return`/`is_anomalous`/`window_status`/`accuracy_report` は純関数。`price_fn` 差し替え可。

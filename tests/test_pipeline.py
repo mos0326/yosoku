@@ -199,7 +199,9 @@ def test_dedup_events():
 
 
 def _pipeline(events, mapping, cfg=None, notifier=None, analyzer=None):
-    cfg = cfg or Config()
+    if cfg is None:
+        cfg = Config()
+        cfg.analysis.min_daily_alerts = 0  # 既定はデイリーピック無効(実行時刻に依存させない)
     cfg.analysis.fetch_price_on_alert = False  # テストでは実ネットワークを叩かない
     store = Store(":memory:")
     analyzer = analyzer or FakeAnalyzer(mapping)
@@ -278,8 +280,10 @@ def test_startup_ping_sent_once():
     ev = _event(eid="tdnet:200")
     store = Store(":memory:")
     notifier = FakeTextNotifier()
+    cfg = Config()
+    cfg.analysis.min_daily_alerts = 0  # ピックの不足通知を混ぜない(時刻非依存に)
     pipe = Pipeline(
-        config=Config(),
+        config=cfg,
         sources=[FakeSource([ev])],
         analyzer=FakeAnalyzer({"tdnet:200": _outcome(score=10)}),
         store=store,
@@ -379,3 +383,90 @@ def test_arbiter_disabled_skips_call():
     result = _run(pipe)
     assert result.notified == 1
     assert analyzer.arbitrated == []  # 無効時は呼ばれない
+
+
+# ---- デイリーピック(1日最低件数の保証) -------------------------------------
+
+
+def _seed_signal(store, eid, score=55, notified=False, ticker="7203.T"):
+    ev = _event(eid=eid)
+    store.record_signal(
+        Signal(event=ev, analysis=_outcome(score=score, ticker=ticker).analysis, stage="deep"),
+        notified=notified,
+    )
+
+
+def _pick_now():
+    from yosoku.clock import now_jst
+
+    return now_jst()  # daily_pick_time="00:00" と組み合わせて常に発火時刻扱いにする
+
+
+def test_daily_pick_fills_quota_with_top_candidates():
+    cfg = Config()
+    cfg.analysis.min_daily_alerts = 2
+    cfg.analysis.daily_pick_time = "00:00"
+    pipe, store, _, notifier = _pipeline([], {}, cfg=cfg)
+    _seed_signal(store, "tdnet:p1", score=55, ticker="1111.T")
+    _seed_signal(store, "tdnet:p2", score=50, ticker="2222.T")
+    _seed_signal(store, "tdnet:p3", score=45, ticker="3333.T")
+
+    asyncio.run(pipe._maybe_daily_pick(now=_pick_now()))
+    assert len(notifier.sent) == 2                       # 上位2件だけ
+    tickers = {s.display_ticker for s in notifier.sent}
+    assert tickers == {"1111.T", "2222.T"}
+    assert all(s.event.extra.get("daily_pick") for s in notifier.sent)
+    # 選ばれた候補は通知済みに更新され、二重選出されない
+    asyncio.run(pipe._maybe_daily_pick(now=_pick_now()))
+    assert len(notifier.sent) == 2                       # メタで1日1回
+
+
+def test_daily_pick_skips_when_quota_met():
+    cfg = Config()
+    cfg.analysis.min_daily_alerts = 1
+    cfg.analysis.daily_pick_time = "00:00"
+    pipe, store, _, notifier = _pipeline([], {}, cfg=cfg)
+    _seed_signal(store, "tdnet:done", score=90, notified=True)   # 当日すでに1件通知済み
+    _seed_signal(store, "tdnet:cand", score=55)
+
+    asyncio.run(pipe._maybe_daily_pick(now=_pick_now()))
+    assert notifier.sent == []
+
+
+def test_daily_pick_before_time_does_nothing():
+    cfg = Config()
+    cfg.analysis.min_daily_alerts = 2
+    cfg.analysis.daily_pick_time = "19:00"
+    pipe, store, _, notifier = _pipeline([], {}, cfg=cfg)
+    _seed_signal(store, "tdnet:early", score=55)
+
+    before = _pick_now().replace(hour=10, minute=0)
+    asyncio.run(pipe._maybe_daily_pick(now=before))
+    assert notifier.sent == []
+    # メタも立てない(その日のうちに発火時刻が来たら実施できる)
+    asyncio.run(pipe._maybe_daily_pick(now=before.replace(hour=20)))
+    assert len(notifier.sent) == 1
+
+
+def test_daily_pick_respects_min_score_floor():
+    cfg = Config()
+    cfg.analysis.min_daily_alerts = 2
+    cfg.analysis.daily_pick_time = "00:00"
+    cfg.analysis.daily_pick_min_score = 30
+    pipe, store, _, notifier = _pipeline([], {}, cfg=cfg)
+    _seed_signal(store, "tdnet:junk", score=10)          # floor 未満は採用しない
+
+    asyncio.run(pipe._maybe_daily_pick(now=_pick_now()))
+    assert notifier.sent == []
+
+
+def test_daily_pick_embed_shows_kubun():
+    from yosoku.notifier import build_embed, notify_content
+
+    ev = _event()
+    ev.extra["daily_pick"] = True
+    sig = Signal(event=ev, analysis=_outcome(score=55).analysis, stage="deep")
+    assert "本日の注目候補" in notify_content(sig)
+    names = {f["name"]: f["value"] for f in build_embed(sig)["fields"]}
+    assert "区分" in names
+    assert "ベスト候補" in names["区分"]

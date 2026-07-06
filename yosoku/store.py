@@ -150,6 +150,43 @@ class Store:
         sql += " ORDER BY created_at DESC LIMIT ?"
         return list(self._conn.execute(sql, (limit,)).fetchall())
 
+    # ---- デイリーピック用 -------------------------------------------------
+
+    def count_notified_since(self, created_utc: str) -> int:
+        """created_utc('YYYY-MM-DD HH:MM:SS', UTC)以降に通知済みのシグナル数。"""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM signals WHERE notified = 1 AND created_at >= ?",
+            (created_utc,),
+        ).fetchone()
+        return int(row["n"])
+
+    def top_unnotified_since(
+        self, created_utc: str, limit: int = 5, min_score: int = 0
+    ) -> list[sqlite3.Row]:
+        """未通知の強気シグナルをスコア順に返す(補欠候補の選出用)。"""
+        return list(
+            self._conn.execute(
+                """
+                SELECT * FROM signals
+                WHERE notified = 0
+                  AND created_at >= ?
+                  AND direction = 'bullish'
+                  AND ticker IS NOT NULL
+                  AND score >= ?
+                ORDER BY score DESC, confidence DESC
+                LIMIT ?
+                """,
+                (created_utc, min_score, limit),
+            ).fetchall()
+        )
+
+    def set_signal_notified(self, event_id: str) -> None:
+        """補欠通知の送信後に通知済みへ更新する(重複選出の防止)。"""
+        self._conn.execute(
+            "UPDATE signals SET notified = 1 WHERE event_id = ?", (event_id,)
+        )
+        self._conn.commit()
+
     # ---- alerts(エントリー価格の凍結) / outcomes(答え合わせ) -----------
 
     def freeze_alert(

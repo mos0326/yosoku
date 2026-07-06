@@ -101,6 +101,13 @@ class AnalysisConfig:
     max_retries: int = 4  # Anthropic クライアントの再試行回数
     request_timeout: float = 60.0  # 1 リクエストのタイムアウト(秒)
 
+    # --- デイリーピック(1日の最低通知件数の保証) ---
+    # daily_pick_time(JST)を過ぎても当日の通知が min_daily_alerts に満たない場合、
+    # 当日分析した中から基準未達/最終判定見送りの上位候補を「補欠」として通知する。
+    min_daily_alerts: int = 2
+    daily_pick_time: str = "19:00"  # JST。引け後の開示ラッシュが一巡した頃
+    daily_pick_min_score: int = 30  # これ未満の候補は補欠にも採用しない
+
     notify_tickerless: bool = False  # 銘柄不明のニュースでも通知するか
     # 東京プロマーケットのみ上場(一般売買しにくい)の銘柄は通知しない。
     exclude_pro_market: bool = True
@@ -187,6 +194,11 @@ def load_config(path: str | None = None) -> Config:
         ac.concurrency = _as_int(a.get("concurrency"), ac.concurrency)
         ac.max_retries = _as_int(a.get("max_retries"), ac.max_retries)
         ac.request_timeout = float(a.get("request_timeout", ac.request_timeout))
+        ac.min_daily_alerts = _as_int(a.get("min_daily_alerts"), ac.min_daily_alerts)
+        ac.daily_pick_time = a.get("daily_pick_time", ac.daily_pick_time)
+        ac.daily_pick_min_score = _as_int(
+            a.get("daily_pick_min_score"), ac.daily_pick_min_score
+        )
         ac.notify_tickerless = bool(a.get("notify_tickerless", ac.notify_tickerless))
         ac.exclude_pro_market = bool(a.get("exclude_pro_market", ac.exclude_pro_market))
         ac.fetch_price_on_alert = bool(

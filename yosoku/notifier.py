@@ -47,6 +47,13 @@ def _format_pts(signal: Signal) -> str:
     return f"{cur}{p['price']:,.0f}" + (f" ({t})" if t else "")
 
 
+def notify_content(signal: Signal) -> str:
+    """通知本文(embed の上に出る1行)。デイリーピックは区別する。"""
+    if signal.event.extra.get("daily_pick"):
+        return "🌙 本日の注目候補(定時ピック)"
+    return "🔔 トレーディングシグナル検知"
+
+
 def build_embed(signal: Signal) -> dict:
     a = signal.analysis
     ticker = signal.display_ticker or "—"
@@ -59,6 +66,14 @@ def build_embed(signal: Signal) -> dict:
     title = title.strip()
 
     fields: list[dict] = []
+    if signal.event.extra.get("daily_pick"):
+        fields.append(
+            {
+                "name": "区分",
+                "value": "本日のベスト候補(通知基準未達/最終判定見送り分からの上位選出)",
+                "inline": False,
+            }
+        )
     if act:
         fields.append({"name": "買い時", "value": f"{act_emoji} {act}".strip(), "inline": True})
     if a.priority is not None:
@@ -121,7 +136,7 @@ class DiscordNotifier:
 
     def notify(self, signal: Signal) -> bool:
         payload = {
-            "content": "🔔 トレーディングシグナル検知",
+            "content": notify_content(signal),
             "embeds": [build_embed(signal)],
         }
         try:
