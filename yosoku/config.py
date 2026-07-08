@@ -105,7 +105,9 @@ class AnalysisConfig:
     # daily_pick_time(JST)を過ぎても当日の通知が min_daily_alerts に満たない場合、
     # 当日分析した中から基準未達/最終判定見送りの上位候補を「補欠」として通知する。
     min_daily_alerts: int = 2
-    daily_pick_time: str = "19:00"  # JST。引け後の開示ラッシュが一巡した頃
+    # JST。引け後の開示ラッシュが一巡した頃。YAML では "19:00" と引用符で囲むこと。
+    # 注意: active_window を絞る場合はこの時刻が窓内に入るようにする(窓外では発火しない)。
+    daily_pick_time: str = "19:00"
     daily_pick_min_score: int = 30  # これ未満の候補は補欠にも採用しない
 
     notify_tickerless: bool = False  # 銘柄不明のニュースでも通知するか
@@ -195,7 +197,8 @@ def load_config(path: str | None = None) -> Config:
         ac.max_retries = _as_int(a.get("max_retries"), ac.max_retries)
         ac.request_timeout = float(a.get("request_timeout", ac.request_timeout))
         ac.min_daily_alerts = _as_int(a.get("min_daily_alerts"), ac.min_daily_alerts)
-        ac.daily_pick_time = a.get("daily_pick_time", ac.daily_pick_time)
+        # YAML で 19:00 を引用符なしで書くと六十進整数(1140)になるため必ず文字列化する。
+        ac.daily_pick_time = str(a.get("daily_pick_time", ac.daily_pick_time))
         ac.daily_pick_min_score = _as_int(
             a.get("daily_pick_min_score"), ac.daily_pick_min_score
         )

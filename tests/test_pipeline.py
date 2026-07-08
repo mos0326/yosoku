@@ -470,3 +470,18 @@ def test_daily_pick_embed_shows_kubun():
     names = {f["name"]: f["value"] for f in build_embed(sig)["fields"]}
     assert "区分" in names
     assert "ベスト候補" in names["区分"]
+
+
+def test_daily_pick_skips_ticker_already_notified_today():
+    cfg = Config()
+    cfg.analysis.min_daily_alerts = 2
+    cfg.analysis.daily_pick_time = "00:00"
+    pipe, store, _, notifier = _pipeline([], {}, cfg=cfg)
+    # 同一銘柄: 朝に正規通知済み + 夕方に別イベントの未通知候補
+    _seed_signal(store, "tdnet:morning", score=90, notified=True, ticker="7203.T")
+    _seed_signal(store, "tdnet:dup", score=55, ticker="7203.T")
+    _seed_signal(store, "tdnet:other", score=50, ticker="8888.T")
+
+    asyncio.run(pipe._maybe_daily_pick(now=_pick_now()))
+    # 不足1件は 7203.T の重複ではなく別銘柄で埋める
+    assert [s.display_ticker for s in notifier.sent] == ["8888.T"]

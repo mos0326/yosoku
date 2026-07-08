@@ -180,6 +180,15 @@ class Store:
             ).fetchall()
         )
 
+    def notified_tickers_since(self, created_utc: str) -> set[str]:
+        """指定時刻以降に通知済みのティッカー集合(補欠の同日重複を防ぐ)。"""
+        rows = self._conn.execute(
+            "SELECT DISTINCT ticker FROM signals "
+            "WHERE notified = 1 AND created_at >= ? AND ticker IS NOT NULL",
+            (created_utc,),
+        ).fetchall()
+        return {r["ticker"] for r in rows}
+
     def set_signal_notified(self, event_id: str) -> None:
         """補欠通知の送信後に通知済みへ更新する(重複選出の防止)。"""
         self._conn.execute(

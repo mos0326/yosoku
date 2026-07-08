@@ -311,8 +311,8 @@ class Pipeline:
             return
         n = to_jst(now) if now else now_jst()
         try:
-            hh, mm = (int(x) for x in a.daily_pick_time.split(":"))
-        except ValueError:
+            hh, mm = (int(x) for x in str(a.daily_pick_time).split(":"))
+        except (ValueError, AttributeError):
             logger.warning("daily_pick_time が不正: %r", a.daily_pick_time)
             return
         if (n.hour, n.minute) < (hh, mm):
@@ -329,7 +329,8 @@ class Pipeline:
             return
 
         sent = 0
-        seen_tickers: set[str] = set()
+        # 当日すでに通知した銘柄は補欠でも重複させない。
+        seen_tickers: set[str] = self.store.notified_tickers_since(day_start_utc)
         candidates = self.store.top_unnotified_since(
             day_start_utc, limit=need + 5, min_score=a.daily_pick_min_score
         )
@@ -337,7 +338,7 @@ class Pipeline:
             if sent >= need:
                 break
             signal = _signal_from_row(row)
-            if signal is None:
+            if signal is None or not signal.analysis.is_relevant:
                 continue
             ticker = signal.display_ticker
             if ticker in seen_tickers:
