@@ -23,43 +23,68 @@ DEFAULT_ARBITER_MODEL = "claude-fable-5"
 # ニュース RSS の既定フィード。無料かつ比較的安定なものを初期値にしている。
 DEFAULT_NEWS_FEEDS = [
     "https://www.nhk.or.jp/rss/news/cat5.xml",  # NHK ニュース(経済)
+    "https://news.yahoo.co.jp/rss/topics/business.xml",  # Yahoo!ニュース 経済トピックス
 ]
 
 # 開示の一次フィルタに使う既定キーワード。ここに引っかかった開示だけを
 # LLM 分析に回してコストを抑える(空にすると全件を分析する)。
+# タイトルの部分一致。ノイズは安価なトリアージ(haiku)が弾くので、
+# 「上がりうる材料」は広めに拾う方針。
 DEFAULT_RELEVANCE_KEYWORDS = [
+    # 業績・決算系
     "決算",
     "業績予想",
     "上方修正",
     "下方修正",
+    "月次",
+    "最高益",
+    "黒字",
+    "増益",
+    # 株主還元系
     "配当",
     "増配",
     "復配",
     "自己株式",
     "自社株買",
     "株式分割",
-    "業務提携",
-    "資本提携",
+    "優待",
+    # 資本・再編系
+    "提携",
     "公開買付",
     "TOB",
     "M&A",
+    "MBO",
+    "買収",
+    "子会社化",
+    "株式交換",
+    "出資",
+    "プライム",
+    # 事業・材料系
     "新製品",
     "受注",
+    "契約締結",
+    "共同開発",
+    "ライセンス",
+    "特許",
+    "治験",
+    "承認",
 ]
 
 
 @dataclass
 class TdnetConfig:
     enabled: bool = True
-    limit: int = 50
+    # 1回のポーリングで見る開示件数。決算集中日の15時台は1分間に50件を超える
+    # ことがあるため、取りこぼし防止で広めに取る(重複は seen で弾くので安全)。
+    limit: int = 150
     watchlist: list[str] = field(default_factory=list)
 
 
 @dataclass
 class NewsConfig:
-    # 既定はオフ。ニュースは特定1銘柄のシグナルになりにくく、件数だけ多く
-    # コストを消費しがちなため。必要なら config で enabled: true にする。
-    enabled: bool = False
+    # 報道(M&A観測・提携報道など)は開示より先に動くことがあるため既定オン。
+    # 件数は少なめのフィードに限定しており、トリアージ(haiku)コストは軽微。
+    enabled: bool = True
     feeds: list[str] = field(default_factory=lambda: list(DEFAULT_NEWS_FEEDS))
 
 
@@ -158,7 +183,7 @@ def load_config(path: str | None = None) -> Config:
         t = data["tdnet"]
         cfg.tdnet = TdnetConfig(
             enabled=bool(t.get("enabled", True)),
-            limit=_as_int(t.get("limit"), 50),
+            limit=_as_int(t.get("limit"), 150),
             watchlist=[str(c) for c in (t.get("watchlist") or [])],
         )
 

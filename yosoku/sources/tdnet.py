@@ -101,7 +101,7 @@ class TdnetSource(Source):
 
     def __init__(
         self,
-        limit: int = 50,
+        limit: int = 150,
         watchlist: list[str] | None = None,
         timeout: float = 30.0,
         retries: int = 3,
