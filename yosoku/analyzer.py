@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time as _time
 from dataclasses import dataclass
 
 import anthropic
@@ -105,6 +106,23 @@ class TieredAnalyzer:
             max_retries=config.analysis.max_retries,
             timeout=config.analysis.request_timeout,
         )
+        # クォータ枯渇(利用上限/残高不足)の検知状態。
+        # 検知中は一定時間 API を叩かず、pipeline が Discord へ自己診断通知を送る。
+        self.quota_error: str | None = None
+        self._quota_pause_until: float = 0.0
+
+    _QUOTA_MARKERS = ("usage limits", "credit balance")
+    _QUOTA_PAUSE_SEC = 900.0  # 15分ごとに1回だけ再確認する
+
+    def _note_api_error(self, e: Exception) -> None:
+        """クォータ系のエラーなら検知状態にする(それ以外は何もしない)。"""
+        msg = str(e)
+        if any(m in msg for m in self._QUOTA_MARKERS):
+            self.quota_error = msg[:300]
+            self._quota_pause_until = _time.monotonic() + self._QUOTA_PAUSE_SEC
+
+    def _quota_paused(self) -> bool:
+        return _time.monotonic() < self._quota_pause_until
 
     async def aclose(self) -> None:
         try:
@@ -116,6 +134,8 @@ class TieredAnalyzer:
 
     async def analyze(self, event: RawEvent) -> AnalysisOutcome | None:
         """1件を評価する。失敗時は None(次サイクルで再試行)。"""
+        if self._quota_paused():
+            return None  # 利用上限の枯渇中は叩かない(時間を置いて自動再確認)
         a = self.config.analysis
 
         if not a.two_stage:
@@ -197,6 +217,8 @@ class TieredAnalyzer:
             lines.append(f"\n--- 開示本文(抜粋) ---\n{event.document_text[:1200]}\n---")
         lines.append("\nこのシグナルを通知して良いか最終判定してください。")
 
+        if self._quota_paused():
+            return None
         try:
             # Fable は thinking 常時ONのため thinking パラメータは渡さない(渡すと400)。
             response = await self.client.messages.parse(
@@ -207,6 +229,7 @@ class TieredAnalyzer:
                 output_format=ArbiterVerdict,
             )
         except anthropic.APIError as e:
+            self._note_api_error(e)
             logger.warning("最終判定に失敗(%s, %s): %s", event.event_id, a.arbiter_model, e)
             return None
         except Exception as e:  # パース失敗など
@@ -323,12 +346,15 @@ class TieredAnalyzer:
         try:
             response = await self.client.messages.parse(**kwargs)
         except anthropic.APIError as e:
+            self._note_api_error(e)
             logger.error("Claude 分析失敗(%s, %s): %s", event.event_id, model, e)
             return None
         except Exception as e:  # 構造化出力のパース失敗など
+            self._note_api_error(e)
             logger.warning("分析の応答処理に失敗(%s, %s): %s", event.event_id, model, e)
             return None
 
+        self.quota_error = None  # 成功したら枯渇状態を解除
         self.usage.add(model, getattr(response, "usage", None))
 
         analysis = getattr(response, "parsed_output", None)

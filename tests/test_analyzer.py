@@ -212,3 +212,57 @@ def test_arbitrate_error_returns_none():
     event = RawEvent(source="tdnet", event_id="tdnet:err", title="上方修正", company_code="72030")
     out = _run(analyzer.arbitrate(event, _analysis(score=85)))
     assert out is None
+
+
+# ---- クォータ枯渇の検知 -----------------------------------------------------
+
+
+def test_quota_exhaustion_detected_and_paused():
+    class QuotaBoomMessages:
+        def __init__(self):
+            self.calls = 0
+
+        async def parse(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError(
+                "Error code: 400 - You have reached your specified API usage limits."
+            )
+
+    class QuotaBoomClient:
+        def __init__(self):
+            self.messages = QuotaBoomMessages()
+
+        async def close(self):
+            pass
+
+    client = QuotaBoomClient()
+    analyzer = TieredAnalyzer(_config(), client=client, usage=UsageTracker())
+    event = RawEvent(source="tdnet", event_id="tdnet:q", title="決算", company_code="72030")
+
+    out = _run(analyzer.analyze(event))
+    assert out is None
+    assert analyzer.quota_error is not None          # 枯渇を検知
+    calls_after_first = client.messages.calls
+
+    # 検知中は API を叩かず即 None(連打しない)
+    out2 = _run(analyzer.analyze(event))
+    assert out2 is None
+    assert client.messages.calls == calls_after_first
+
+
+def test_normal_error_does_not_trigger_quota_state():
+    class BoomMessages:
+        async def parse(self, **kwargs):
+            raise RuntimeError("boom (network)")
+
+    class BoomClient:
+        def __init__(self):
+            self.messages = BoomMessages()
+
+        async def close(self):
+            pass
+
+    analyzer = TieredAnalyzer(_config(), client=BoomClient(), usage=UsageTracker())
+    event = RawEvent(source="tdnet", event_id="tdnet:n", title="決算", company_code="72030")
+    assert _run(analyzer.analyze(event)) is None
+    assert analyzer.quota_error is None              # ただの失敗では枯渇扱いしない

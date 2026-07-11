@@ -485,3 +485,28 @@ def test_daily_pick_skips_ticker_already_notified_today():
     asyncio.run(pipe._maybe_daily_pick(now=_pick_now()))
     # 不足1件は 7203.T の重複ではなく別銘柄で埋める
     assert [s.display_ticker for s in notifier.sent] == ["8888.T"]
+
+
+# ---- クォータ枯渇の自己診断通知 ----------------------------------------------
+
+
+def test_quota_alert_sent_once_per_day():
+    class QuotaAnalyzer(FakeAnalyzer):
+        quota_error = "You have reached your specified API usage limits."
+
+    notifier = FakeTextNotifier()
+    pipe, store, _, _ = _pipeline([], {}, notifier=notifier, analyzer=QuotaAnalyzer({}))
+    _run(pipe)
+    alerts = [t for t in notifier.texts if "利用上限" in t]
+    assert len(alerts) == 1                          # 原因と直し方を通知
+    assert "Settings → Limits" in alerts[0]
+    _run(pipe)
+    alerts2 = [t for t in notifier.texts if "利用上限" in t]
+    assert len(alerts2) == 1                         # 同日は再送しない
+
+
+def test_no_quota_alert_when_healthy():
+    notifier = FakeTextNotifier()
+    pipe, store, _, _ = _pipeline([], {}, notifier=notifier)
+    _run(pipe)
+    assert all("利用上限" not in t for t in notifier.texts)

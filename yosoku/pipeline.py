@@ -272,6 +272,12 @@ class Pipeline:
         except Exception:
             logger.exception("デイリーピックで例外。継続する。")
 
+        # 6) API上限枯渇の自己診断通知(気づかないまま止まり続けるのを防ぐ)。
+        try:
+            self._maybe_quota_alert()
+        except Exception:
+            logger.exception("自己診断通知で例外。継続する。")
+
         if self.usage is not None:
             result.cost = self.usage.total_cost
             result.usage_summary = self.usage.summary()
@@ -360,6 +366,31 @@ class Pipeline:
                     f"基準(score≥{a.daily_pick_min_score})に届く補欠候補が足りませんでした。"
                 )
         logger.info("デイリーピック: %d件送信(不足%d件)", sent, need)
+
+    def _maybe_quota_alert(self) -> None:
+        """API利用上限/残高不足で分析が止まっている場合、1日1回 Discord に知らせる。
+
+        「静かに止まり続けて通知ゼロ」が最悪のUXなので、原因と直し方を明示する。
+        分析が1件でも成功すると analyzer 側で解除され、通知も止まる。
+        """
+        reason = getattr(self.analyzer, "quota_error", None)
+        if not reason or self.dry_run or self.notifier is None:
+            return
+        send = getattr(self.notifier, "notify_text", None)
+        if send is None:
+            return
+        key = f"quota_alert:{now_jst().date().isoformat()}"
+        if self.store.get_meta(key) is not None:
+            return
+        ok = send(
+            "⛔ **Anthropic API の利用上限に達したため、分析を停止しています。**\n"
+            "このままでは上限がリセットされるまで通知は出ません。\n"
+            "→ console.anthropic.com の **Settings → Limits** で月間上限を"
+            "引き上げると、数分以内に自動で再開します。\n"
+            f"```{reason[:250]}```"
+        )
+        if ok:
+            self.store.set_meta(key, "1")
 
     async def _arbitrate(self, signal: Signal) -> ArbiterVerdict | None:
         """通知直前の最終判定を(有効時のみ)実行する。使えなければ None。
