@@ -135,6 +135,10 @@ class AnalysisConfig:
     daily_pick_time: str = "19:00"
     daily_pick_min_score: int = 30  # これ未満の候補は補欠にも採用しない
 
+    # API上限枯渇の警報を送る時刻(JST)。日付が変わった深夜0時に送ると目に
+    # 入らないため、市場が開く前の朝に届ける。YAML では引用符で囲むこと。
+    quota_alert_time: str = "08:30"
+
     notify_tickerless: bool = False  # 銘柄不明のニュースでも通知するか
     # 東京プロマーケットのみ上場(一般売買しにくい)の銘柄は通知しない。
     exclude_pro_market: bool = True
@@ -227,6 +231,7 @@ def load_config(path: str | None = None) -> Config:
         ac.daily_pick_min_score = _as_int(
             a.get("daily_pick_min_score"), ac.daily_pick_min_score
         )
+        ac.quota_alert_time = str(a.get("quota_alert_time", ac.quota_alert_time))
         ac.notify_tickerless = bool(a.get("notify_tickerless", ac.notify_tickerless))
         ac.exclude_pro_market = bool(a.get("exclude_pro_market", ac.exclude_pro_market))
         ac.fetch_price_on_alert = bool(

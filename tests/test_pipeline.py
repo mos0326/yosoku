@@ -490,12 +490,21 @@ def test_daily_pick_skips_ticker_already_notified_today():
 # ---- クォータ枯渇の自己診断通知 ----------------------------------------------
 
 
+def _quota_cfg(alert_time="00:00"):
+    cfg = Config()
+    cfg.analysis.min_daily_alerts = 0
+    cfg.analysis.quota_alert_time = alert_time  # 実行時刻に依存させない
+    return cfg
+
+
 def test_quota_alert_sent_once_per_day():
     class QuotaAnalyzer(FakeAnalyzer):
         quota_error = "You have reached your specified API usage limits."
 
     notifier = FakeTextNotifier()
-    pipe, store, _, _ = _pipeline([], {}, notifier=notifier, analyzer=QuotaAnalyzer({}))
+    pipe, store, _, _ = _pipeline(
+        [], {}, cfg=_quota_cfg(), notifier=notifier, analyzer=QuotaAnalyzer({})
+    )
     _run(pipe)
     alerts = [t for t in notifier.texts if "利用上限" in t]
     assert len(alerts) == 1                          # 原因と直し方を通知
@@ -507,9 +516,27 @@ def test_quota_alert_sent_once_per_day():
 
 def test_no_quota_alert_when_healthy():
     notifier = FakeTextNotifier()
-    pipe, store, _, _ = _pipeline([], {}, notifier=notifier)
+    pipe, store, _, _ = _pipeline([], {}, cfg=_quota_cfg(), notifier=notifier)
     _run(pipe)
     assert all("利用上限" not in t for t in notifier.texts)
+
+
+def test_quota_alert_waits_until_morning():
+    class QuotaAnalyzer(FakeAnalyzer):
+        quota_error = "You have reached your specified API usage limits."
+
+    notifier = FakeTextNotifier()
+    pipe, store, _, _ = _pipeline(
+        [], {}, cfg=_quota_cfg("08:30"), notifier=notifier, analyzer=QuotaAnalyzer({})
+    )
+    from yosoku.clock import now_jst
+
+    night = now_jst().replace(hour=1, minute=0)
+    pipe._maybe_quota_alert(now=night)
+    assert all("利用上限" not in t for t in notifier.texts)  # 深夜0時台は送らない
+    morning = now_jst().replace(hour=8, minute=31)
+    pipe._maybe_quota_alert(now=morning)
+    assert any("利用上限" in t for t in notifier.texts)      # 朝になったら届く
 
 
 def test_watch_warns_when_notifier_missing(caplog):

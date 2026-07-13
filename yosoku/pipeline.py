@@ -367,11 +367,13 @@ class Pipeline:
                 )
         logger.info("デイリーピック: %d件送信(不足%d件)", sent, need)
 
-    def _maybe_quota_alert(self) -> None:
+    def _maybe_quota_alert(self, now=None) -> None:
         """API利用上限/残高不足で分析が止まっている場合、1日1回 Discord に知らせる。
 
         「静かに止まり続けて通知ゼロ」が最悪のUXなので、原因と直し方を明示する。
-        分析が1件でも成功すると analyzer 側で解除され、通知も止まる。
+        深夜0時の日付変わり直後に送ると目に入らないため、quota_alert_time
+        (既定 8:30 JST、市場前)以降に届ける。分析が1件でも成功すると
+        analyzer 側で解除され、通知も止まる。
         """
         reason = getattr(self.analyzer, "quota_error", None)
         if not reason or self.dry_run or self.notifier is None:
@@ -379,7 +381,14 @@ class Pipeline:
         send = getattr(self.notifier, "notify_text", None)
         if send is None:
             return
-        key = f"quota_alert:{now_jst().date().isoformat()}"
+        n = to_jst(now) if now else now_jst()
+        try:
+            hh, mm = (int(x) for x in str(self.config.analysis.quota_alert_time).split(":"))
+        except (ValueError, AttributeError):
+            hh, mm = 8, 30
+        if (n.hour, n.minute) < (hh, mm):
+            return  # 朝の送信時刻まで待つ(その日のうちに必ず届く)
+        key = f"quota_alert:{n.date().isoformat()}"
         if self.store.get_meta(key) is not None:
             return
         ok = send(
