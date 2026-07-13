@@ -452,6 +452,14 @@ class Pipeline:
             interval,
             f"{max_runtime}s" if max_runtime else "無制限",
         )
+        # 起動時セルフチェック: 通知経路が無いまま静かに走り続けるのが最悪なので明示する。
+        if self.notifier is None and not self.dry_run:
+            logger.error(
+                "⚠️ Discord 通知が無効です(DISCORD_WEBHOOK_URL 未設定)。"
+                "シグナル・デイリーピック・稼働確認は一切送信されません。"
+            )
+        else:
+            logger.info("Discord 通知: 有効")
         while True:
             if is_active_now(self.config.active_window, self.config.weekdays_only):
                 try:

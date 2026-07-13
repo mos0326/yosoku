@@ -40,6 +40,24 @@ jobs:
       - name: Install
         run: pip install -e .
 
+      # Secret の存在チェック。空だと通知/分析が静かに死ぬため、run ページに
+      # 警告(annotation)として目立たせる。値そのものは一切出力しない。
+      - name: Check secrets
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY が未設定です。AI分析が動きません。Settings → Secrets and variables → Actions で登録してください。"
+          else
+            echo "ANTHROPIC_API_KEY: 設定済み"
+          fi
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "::error::DISCORD_WEBHOOK_URL が未設定です。通知が一切届きません。Settings → Secrets and variables → Actions で登録してください。"
+          else
+            echo "DISCORD_WEBHOOK_URL: 設定済み"
+          fi
+
       # 状態DB(重複管理)を引き継ぐローリングキャッシュ。
       # watch がクリーン終了すると post ステップで保存される。
       - name: Cache state

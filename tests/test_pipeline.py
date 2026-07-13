@@ -510,3 +510,24 @@ def test_no_quota_alert_when_healthy():
     pipe, store, _, _ = _pipeline([], {}, notifier=notifier)
     _run(pipe)
     assert all("利用上限" not in t for t in notifier.texts)
+
+
+def test_watch_warns_when_notifier_missing(caplog):
+    import logging as _logging
+
+    ev = _event(eid="tdnet:nn")
+    cfg = Config()
+    cfg.weekdays_only = False
+    cfg.analysis.min_daily_alerts = 0
+    cfg.analysis.fetch_price_on_alert = False
+    pipe = Pipeline(
+        config=cfg,
+        sources=[FakeSource([ev])],
+        analyzer=FakeAnalyzer({}),
+        store=Store(":memory:"),
+        notifier=None,  # DISCORD_WEBHOOK_URL 未設定相当
+        usage=UsageTracker(),
+    )
+    with caplog.at_level(_logging.ERROR, logger="yosoku.pipeline"):
+        asyncio.run(pipe.watch(interval=0, max_runtime=0))
+    assert any("DISCORD_WEBHOOK_URL 未設定" in r.message for r in caplog.records)
