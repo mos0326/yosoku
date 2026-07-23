@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>鉄板の極 — 超リアル調理 3D (4K)</title>
+<style>
+  :root{
+    --panel:#14100cE6; --panel2:#1e1812F2; --line:#3a2f22;
+    --gold:#e8b34b; --amber:#ffb24d; --red:#e2483c; --green:#7fc96b;
+    --text:#f3e9d8; --dim:#b6a488;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#000}
+  body{font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,system-ui,sans-serif;color:var(--text)}
+  #app{position:fixed;inset:0}
+  canvas{display:block}
+
+  .hud{position:absolute;pointer-events:none;user-select:none;-webkit-user-select:none}
+  .hud *{pointer-events:auto}
+
+  /* ---- top bar ---- */
+  #topbar{top:0;left:0;right:0;display:flex;align-items:center;gap:12px;padding:10px 14px;
+    background:linear-gradient(180deg,rgba(0,0,0,.55),transparent)}
+  #logo{font-weight:800;letter-spacing:.12em;font-size:18px;color:var(--gold);
+    text-shadow:0 2px 8px rgba(0,0,0,.8)}
+  #logo small{display:block;font-size:9px;letter-spacing:.3em;color:var(--dim);font-weight:600}
+  #money{margin-left:auto;font-size:15px;font-weight:700;color:#ffe9b0;text-shadow:0 1px 4px #000}
+  .chipbtn{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;
+    padding:5px 10px;font-size:12px;cursor:pointer}
+  .chipbtn:hover{border-color:var(--gold)}
+  select.chipbtn{appearance:auto}
+
+  /* ---- order card ---- */
+  #order{top:64px;left:14px;width:230px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:12px 14px;backdrop-filter:blur(6px);box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #order h3{font-size:11px;letter-spacing:.25em;color:var(--dim);margin-bottom:6px}
+  #orderText{font-size:15px;font-weight:700;line-height:1.5}
+  #orderTarget{color:var(--amber)}
+  #orderNote{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.6}
+
+  /* ---- gauges ---- */
+  #gauges{top:64px;right:14px;width:250px;display:flex;flex-direction:column;gap:10px}
+  .gauge{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+    backdrop-filter:blur(6px)}
+  .gauge label{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);
+    letter-spacing:.1em;margin-bottom:5px}
+  .gauge label b{color:var(--text);font-variant-numeric:tabular-nums}
+  .bar{position:relative;height:10px;border-radius:5px;background:#000a;overflow:hidden}
+  .bar>i{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:5px;transition:width .15s linear}
+  #panBar>i{background:linear-gradient(90deg,#3d6dd8,#e2b13c,#e2483c)}
+  #coreBar{height:14px}
+  #coreBar>i{background:linear-gradient(90deg,#b03040,#d86a4a,#c9a06a,#8a6a4a)}
+  #coreBar .zone{position:absolute;top:0;bottom:0;background:rgba(127,201,107,.35);
+    border-left:1px solid var(--green);border-right:1px solid var(--green)}
+  .searRow{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--dim)}
+  .searRow .bar{flex:1;height:8px}
+  #searABar>i,#searBBar>i{background:linear-gradient(90deg,#caa27a,#8a4a1e,#241207)}
+  #restWrap{display:none}
+  #restBar>i{background:linear-gradient(90deg,#6a90d8,#7fc96b)}
+
+  /* ---- heat control ---- */
+  #heatCtl{display:flex;flex-direction:column;gap:6px}
+  #heatCtl input[type=range]{width:100%;accent-color:var(--amber);cursor:pointer}
+
+  /* ---- action buttons ---- */
+  #actions{bottom:16px;left:50%;transform:translateX(-50%);display:flex;gap:8px;flex-wrap:wrap;
+    justify-content:center;max-width:96vw}
+  .act{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:12px;
+    padding:10px 14px;font-size:13px;font-weight:700;cursor:pointer;min-width:84px;
+    box-shadow:0 6px 18px rgba(0,0,0,.45);transition:transform .08s,border-color .15s}
+  .act:hover:not(:disabled){border-color:var(--gold);transform:translateY(-2px)}
+  .act:active:not(:disabled){transform:translateY(0)}
+  .act:disabled{opacity:.35;cursor:default}
+  .act small{display:block;font-size:9px;color:var(--dim);font-weight:600;margin-top:2px}
+  .act.primary{background:linear-gradient(180deg,#7a4a1a,#5a3410);border-color:#a8742c}
+
+  /* ---- hint / toast ---- */
+  #hint{bottom:158px;left:50%;transform:translateX(-50%);font-size:13px;color:#ffe9c0;
+    text-shadow:0 2px 6px #000;background:rgba(0,0,0,.35);padding:6px 14px;border-radius:999px;
+    white-space:nowrap}
+  #toast{top:40%;left:50%;transform:translate(-50%,-50%);font-size:30px;font-weight:800;
+    color:var(--gold);text-shadow:0 4px 18px rgba(0,0,0,.9);opacity:0;transition:opacity .3s;
+    letter-spacing:.1em;pointer-events:none!important}
+
+  /* ---- result modal ---- */
+  #result{display:none;position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:10;
+    align-items:center;justify-content:center}
+  #resultCard{width:min(430px,92vw);background:var(--panel2);border:1px solid #56452c;border-radius:16px;
+    padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.7)}
+  #resultCard h2{font-size:14px;letter-spacing:.3em;color:var(--dim);text-align:center}
+  #rank{font-size:64px;font-weight:900;text-align:center;color:var(--gold);line-height:1.1;
+    text-shadow:0 0 24px rgba(232,179,75,.35)}
+  #crossWrap{display:flex;justify-content:center;margin:8px 0 4px}
+  #crossCanvas{border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.5)}
+  #crossLabel{text-align:center;font-size:12px;color:var(--dim);margin-bottom:10px}
+  .scoreRow{display:flex;justify-content:space-between;font-size:13px;padding:5px 2px;
+    border-bottom:1px dashed #3a2f22}
+  .scoreRow b{font-variant-numeric:tabular-nums}
+  #resultPay{text-align:center;font-size:18px;font-weight:800;color:#ffe9b0;margin-top:12px}
+  #nextBtn{display:block;margin:16px auto 0;padding:11px 34px;font-size:15px}
+
+  #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#0a0806;z-index:20;flex-direction:column;gap:14px}
+  #loading .t{font-size:20px;letter-spacing:.35em;color:var(--gold);font-weight:800}
+  #loading .s{font-size:11px;color:var(--dim);letter-spacing:.2em}
+
+  @media (max-width:760px){
+    #order{width:180px}#gauges{width:200px}
+    .act{padding:8px 10px;min-width:64px;font-size:12px}
+    #logo{font-size:14px}
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="loading"><div class="t">鉄板の極</div><div class="s">ULTRA REALISTIC COOKING — LOADING…</div></div>
+
+<div class="hud" id="topbar">
+  <div id="logo">鉄板の極<small>ULTRA REALISTIC COOKING 3D</small></div>
+  <div id="money">¥0</div>
+  <select id="quality" class="chipbtn" title="レンダリング解像度">
+    <option value="auto">画質: 自動</option>
+    <option value="hd">画質: HD</option>
+    <option value="2k">画質: 2K</option>
+    <option value="4k">画質: 4K</option>
+  </select>
+  <button id="soundBtn" class="chipbtn">🔊 音 ON</button>
+</div>
+
+<div class="hud" id="order">
+  <h3>ORDER — 注文</h3>
+  <div id="orderText">焼き加減 <span id="orderTarget">ミディアムレア</span></div>
+  <div id="orderNote">油をひいて強火で焼き目、返して中心温度を合わせ、休ませてから提供。</div>
+</div>
+
+<div class="hud" id="gauges">
+  <div class="gauge" id="heatCtl">
+    <label>コンロ火力 <b id="heatVal">0%</b></label>
+    <input type="range" id="heat" min="0" max="100" value="0">
+    <label style="margin:4px 0 0">パン表面温度 <b id="panTempVal">20°C</b></label>
+    <div class="bar" id="panBar"><i></i></div>
+  </div>
+  <div class="gauge">
+    <label>中心温度 <b id="coreTempVal">8°C</b></label>
+    <div class="bar" id="coreBar"><i></i><div class="zone" id="coreZone"></div></div>
+    <div style="height:8px"></div>
+    <div class="searRow">A面 <div class="bar" id="searABar"><i></i></div></div>
+    <div style="height:5px"></div>
+    <div class="searRow">B面 <div class="bar" id="searBBar"><i></i></div></div>
+    <div id="restWrap">
+      <div style="height:8px"></div>
+      <label>休ませ中 <b id="restVal"></b></label>
+      <div class="bar" id="restBar"><i></i></div>
+    </div>
+  </div>
+</div>
+
+<div class="hud" id="hint">🥩 肉をドラッグしてフライパンへ。パンの中でクリックすると返せます</div>
+<div class="hud" id="toast"></div>
+
+<div class="hud" id="actions">
+  <button class="act" id="btnOil">油をひく<small>サラダ油</small></button>
+  <button class="act" id="btnButter" disabled>バター<small>風味 +</small></button>
+  <button class="act" id="btnSalt">塩<small>下味</small></button>
+  <button class="act" id="btnPepper">こしょう<small>下味</small></button>
+  <button class="act" id="btnFlip" disabled>返す<small>クリックでも可</small></button>
+  <button class="act" id="btnOut" disabled>取り出す<small>まな板で休ませ</small></button>
+  <button class="act primary" id="btnServe" disabled>提供する<small>カット & 盛り付け</small></button>
+</div>
+
+<div id="result">
+  <div id="resultCard">
+    <h2>RESULT — 実食</h2>
+    <div id="rank">A</div>
+    <div id="crossWrap"><canvas id="crossCanvas" width="260" height="130"></canvas></div>
+    <div id="crossLabel">断面 — <span id="crossDoneness"></span></div>
+    <div id="scoreRows"></div>
+    <div id="resultPay">¥1,200</div>
+    <button class="act primary" id="nextBtn">次の注文へ</button>
+  </div>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
